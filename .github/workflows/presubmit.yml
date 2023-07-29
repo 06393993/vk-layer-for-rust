@@ -86,6 +86,9 @@ jobs:
           sparse-checkout-cone-mode: false
           path: target/base-coverage
       - name: Report coverage as comments
+        # TODO: remove this if and the presubmit-comment workflow once we implement job summary
+        # feature in the lcov-reporter-action action.
+        if: ${{ github.event_name != 'pull_request' }}
         # romeovs/lcov-reporter-action@master
         uses: romeovs/lcov-reporter-action@4cf015aa4afa87b78238301f1e3dc140ea0e1ec6
         with:
