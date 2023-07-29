@@ -1,0 +1,73 @@
+# Copyright 2023 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# For safety reasons, we have to pin a third-party github action to a specific commit hash.
+# We can't just run this workflow in the context of the PR for security. See
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/ for details.
+# Once we implement the feature to allow lcov-reporter-action action to use job summary we can move
+# this back to the the presubmit workflow.
+
+name: Comment on the pull request
+
+on:
+  workflow_run:
+    workflows: ["presubmit"]
+    types:
+      - completed
+
+jobs:
+  comment_coverage:
+    runs-on: unbuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - run: rm -rf coverage-Linux
+      - name: Download Linux coverage artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage-Linux
+          path: coverage-Linux
+      - run: rm -rf coverage-Windows
+      - name: Download Windows coverage artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage-Windows
+          path: coverage-Windows
+      - name: Checkout base coverage
+        uses: actions/checkout@v3
+        with:
+          ref: static_resource
+          sparse-checkout: |
+            coverage-Windows/lcov.info
+            coverage-Linux/lcov.info
+          sparse-checkout-cone-mode: false
+          path: base-coverage
+      - name: Report Windows coverage as comments
+        # romeovs/lcov-reporter-action@master
+        uses: romeovs/lcov-reporter-action@4cf015aa4afa87b78238301f1e3dc140ea0e1ec6
+        with:
+          lcov-file: coverage-Windows/lcov.info
+          lcov-base: base-coverage/coverage-Windows/lcov.info
+          filter-changed-files: true
+          title: Test coverage for Windows
+      - name: Report Linux coverage as comments
+        # romeovs/lcov-reporter-action@master
+        uses: romeovs/lcov-reporter-action@4cf015aa4afa87b78238301f1e3dc140ea0e1ec6
+        with:
+          lcov-file: target/lcov.info
+          lcov-base: base-coverage/coverage-Linux/lcov.info
+          filter-changed-files: true
+          title: Test coverage for Linux
+    
