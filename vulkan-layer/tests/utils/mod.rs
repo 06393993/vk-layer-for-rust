@@ -34,6 +34,7 @@ use vulkan_layer::{
     },
     unstable_api::{ApiVersion, Feature, IsCommandEnabled},
     Extension, ExtensionProperties, Global, Layer, LayerVulkanCommand, VkLayerInstanceLink,
+    VulkanBaseInStructChain,
 };
 
 #[derive(Clone)]
@@ -244,8 +245,34 @@ static VULKAN_COMMANDS: Lazy<BTreeMap<VulkanCommandName, VulkanCommand>> = Lazy:
                         _: *const vk::AllocationCallbacks,
                         instance: *mut vk::Instance,
                     ) -> vk::Result {
-                        // TODO: assert that the ICD shouldn't receive a non-zero-length
-                        // VkLayerInstanceLink
+                        // Assert that the ICD shouldn't receive a non-zero-length
+                        // VkLayerInstanceLink.
+                        let p_next_chain = unsafe { create_info.as_ref() }.unwrap().p_next
+                            as *const vk::BaseInStructure;
+                        let mut p_next_chain: VulkanBaseInStructChain =
+                            unsafe { p_next_chain.as_ref() }.into();
+                        let layer_create_info = p_next_chain.find_map(|out_struct| {
+                            let out_struct = out_struct as *const vk::BaseInStructure;
+                            let layer_create_info = unsafe {
+                                ash::match_in_struct!(match out_struct {
+                                    out_struct @ VkLayerInstanceCreateInfo => {
+                                        out_struct
+                                    }
+                                    _ => {
+                                        return None;
+                                    }
+                                })
+                            };
+                            if layer_create_info.function == VkLayerFunction::VK_LAYER_LINK_INFO {
+                                Some(layer_create_info)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(layer_create_info) = layer_create_info {
+                            assert!(unsafe { layer_create_info.u.pLayerInfo }.is_null());
+                        }
+
                         let create_info = unsafe { create_info.as_ref() }.unwrap();
                         let application_info = unsafe { create_info.p_application_info.as_ref() };
                         let enabled_extensions = if create_info.enabled_extension_count == 0 {
@@ -352,8 +379,34 @@ static VULKAN_COMMANDS: Lazy<BTreeMap<VulkanCommandName, VulkanCommand>> = Lazy:
                         _: *const vk::AllocationCallbacks,
                         device: *mut vk::Device,
                     ) -> vk::Result {
-                        // TODO: assert that the ICD shouldn't receive a non-zero-length
-                        // VkLayerDeviceLink
+                        // Assert that the ICD shouldn't receive a non-zero-length
+                        // VkLayerDeviceLink.
+                        let p_next_chain = unsafe { device_create_info.as_ref() }.unwrap().p_next
+                            as *const vk::BaseInStructure;
+                        let mut p_next_chain: VulkanBaseInStructChain =
+                            unsafe { p_next_chain.as_ref() }.into();
+                        let layer_create_info = p_next_chain.find_map(|out_struct| {
+                            let out_struct = out_struct as *const vk::BaseInStructure;
+                            let layer_create_info = unsafe {
+                                ash::match_in_struct!(match out_struct {
+                                    out_struct @ VkLayerDeviceCreateInfo => {
+                                        out_struct
+                                    }
+                                    _ => {
+                                        return None;
+                                    }
+                                })
+                            };
+                            if layer_create_info.function == VkLayerFunction::VK_LAYER_LINK_INFO {
+                                Some(layer_create_info)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(layer_create_info) = layer_create_info {
+                            assert!(unsafe { layer_create_info.u.pLayerInfo }.is_null());
+                        }
+
                         let physical_device =
                             unsafe { PhysicalDeviceData::from_handle(physical_device) };
                         let instance_data = physical_device.owner_instance.upgrade().unwrap();

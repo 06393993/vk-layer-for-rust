@@ -438,58 +438,6 @@ mod get_instance_proc_addr {
         }
 
         #[test]
-        fn test_commands_that_should_always_be_intercepted() {
-            static TEST_GLOBAL: TestGlobal = TestGlobal::builder().build();
-            let _ctx = TEST_GLOBAL.create_context();
-            let app_info = vk::ApplicationInfo::builder().api_version(vk::API_VERSION_1_3);
-            let ctx = vk::InstanceCreateInfo::builder()
-                .application_info(&app_info)
-                .default_instance::<(TestLayer,)>();
-            let InstanceContext {
-                entry,
-                instance,
-                icd_entry,
-                ..
-            } = ctx.as_ref();
-            // TODO: test the actual logic of different functions to remove this test.
-            // vkEnumerateInstanceLayerProperties,
-            // vkEnumerateInstanceExtensionProperties, vkCreateInstance are global
-            // commands, and can't be queried with a valid VkInstance.
-            let commands_must_be_intercepted: &[&'static [u8]] = &[
-                // 4 Android introspection queries.
-                b"vkEnumerateDeviceLayerProperties\0",
-                b"vkEnumerateDeviceExtensionProperties\0",
-                b"vkGetInstanceProcAddr\0",
-                b"vkGetDeviceProcAddr\0",
-                // 2 Physical device enumeration APIs.
-                b"vkEnumeratePhysicalDevices\0",
-                b"vkEnumeratePhysicalDeviceGroups\0",
-                // 3 device, instance creation and destruction APIs.
-                b"vkDestroyInstance\0",
-                b"vkCreateDevice\0",
-                b"vkDestroyDevice\0",
-            ];
-            for command in commands_must_be_intercepted {
-                let fp = unsafe {
-                    entry.get_instance_proc_addr(instance.handle(), command.as_ptr() as *const i8)
-                }
-                .map(|fp| fp as usize);
-                let next_fp = unsafe {
-                    icd_entry
-                        .get_instance_proc_addr(instance.handle(), command.as_ptr() as *const i8)
-                }
-                .map(|fp| fp as usize);
-                let command_name = CStr::from_bytes_with_nul(command).unwrap();
-                assert_ne!(
-                    fp,
-                    next_fp,
-                    "The function pointer to {} should be different.",
-                    command_name.to_string_lossy()
-                );
-            }
-        }
-
-        #[test]
         fn test_should_return_fp_with_available_device_dispatch_command() {
             {
                 static TEST_GLOBAL: TestGlobal = TestGlobal::builder().build();
@@ -1652,6 +1600,186 @@ mod enumerate_device_extensions {
     }
 }
 
+mod enumerate_device_layer_properties {
+    use super::*;
+
+    #[test]
+    fn test_should_return_current_layer_properties_with_matched_name_matches() {
+        static TEST_LAYER_MANIFEST: Lazy<LayerManifest> = Lazy::new(|| {
+            let mut layer_manifest = LayerManifest::test_default();
+            layer_manifest.name = "VK_LAYER_VENDOR_test_enumerate_device_layer_properties";
+            layer_manifest.spec_version = vk::API_VERSION_1_1;
+            layer_manifest.implementation_version = 37;
+            layer_manifest.description = "A layer to test enumerate_device_layer_properties";
+            layer_manifest
+        });
+        static TEST_GLOBAL: TestGlobal = TestGlobal::builder()
+            .set_layer_mock_builder(|| {
+                let mut mock = MockTestLayer::default();
+                mock.expect_manifest()
+                    .return_const(TEST_LAYER_MANIFEST.clone());
+                mock.set_default_expections();
+                mock
+            })
+            .build();
+        let _ctx = TEST_GLOBAL.create_context();
+        let ctx = vk::InstanceCreateInfo::builder().default_instance::<(TestLayer,)>();
+        let InstanceContext { instance, .. } = ctx.as_ref();
+        let enumerate_device_layer_properties =
+            instance.fp_v1_0().enumerate_device_layer_properties;
+        // with null VkPhysicalDevice
+        let mut property_count = 0;
+        assert_eq!(
+            unsafe {
+                enumerate_device_layer_properties(
+                    vk::PhysicalDevice::null(),
+                    &mut property_count,
+                    null_mut(),
+                )
+            },
+            vk::Result::SUCCESS
+        );
+        let mut properties: Vec<vk::LayerProperties> =
+            vec![Default::default(); property_count as usize];
+        assert_eq!(
+            unsafe {
+                enumerate_device_layer_properties(
+                    vk::PhysicalDevice::null(),
+                    &mut property_count,
+                    properties.as_mut_ptr(),
+                )
+            },
+            vk::Result::SUCCESS
+        );
+        assert_eq!(properties.len(), 1);
+        let property = properties[0];
+        assert_eq!(
+            unsafe { CStr::from_ptr(property.layer_name.as_ptr()) }
+                .to_str()
+                .unwrap(),
+            TEST_LAYER_MANIFEST.name
+        );
+        assert_eq!(property.spec_version, TEST_LAYER_MANIFEST.spec_version);
+        assert_eq!(
+            property.implementation_version,
+            TEST_LAYER_MANIFEST.implementation_version
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(property.description.as_ptr()) }
+                .to_str()
+                .unwrap(),
+            TEST_LAYER_MANIFEST.description
+        );
+        // with not null VkPhysicalDevice
+        let physical_device = *unsafe { instance.enumerate_physical_devices() }
+            .unwrap()
+            .first()
+            .unwrap();
+        assert_ne!(physical_device, vk::PhysicalDevice::null());
+        let mut property_count = 0;
+        assert_eq!(
+            unsafe {
+                enumerate_device_layer_properties(physical_device, &mut property_count, null_mut())
+            },
+            vk::Result::SUCCESS
+        );
+        let mut properties: Vec<vk::LayerProperties> =
+            vec![Default::default(); property_count as usize];
+        assert_eq!(
+            unsafe {
+                enumerate_device_layer_properties(
+                    physical_device,
+                    &mut property_count,
+                    properties.as_mut_ptr(),
+                )
+            },
+            vk::Result::SUCCESS
+        );
+        assert_eq!(properties.len(), 1);
+        let property = properties[0];
+        assert_eq!(
+            unsafe { CStr::from_ptr(property.layer_name.as_ptr()) }
+                .to_str()
+                .unwrap(),
+            TEST_LAYER_MANIFEST.name
+        );
+        assert_eq!(property.spec_version, TEST_LAYER_MANIFEST.spec_version);
+        assert_eq!(
+            property.implementation_version,
+            TEST_LAYER_MANIFEST.implementation_version
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(property.description.as_ptr()) }
+                .to_str()
+                .unwrap(),
+            TEST_LAYER_MANIFEST.description
+        );
+    }
+
+    #[test]
+    fn test_should_not_crash_with_unmatched_names() {
+        static TEST_LAYER_MANIFEST: Lazy<LayerManifest> = Lazy::new(|| {
+            let mut layer_manifest = LayerManifest::test_default();
+            layer_manifest.name = "VK_LAYER_VENDOR_test_enumerate_device_layer_properties";
+            layer_manifest.spec_version = vk::API_VERSION_1_1;
+            layer_manifest.implementation_version = 37;
+            layer_manifest.description = "A layer to test enumerate_device_layer_properties";
+            layer_manifest
+        });
+        static TEST_GLOBAL: TestGlobal = TestGlobal::builder()
+            .set_layer_mock_builder(|| {
+                let mut mock = MockTestLayer::default();
+                mock.expect_manifest()
+                    .return_const(TEST_LAYER_MANIFEST.clone());
+                mock.set_default_expections();
+                mock
+            })
+            .build();
+        let _ctx = TEST_GLOBAL.create_context();
+        let ctx = vk::InstanceCreateInfo::builder().default_instance::<(TestLayer,)>();
+        let InstanceContext { instance, .. } = ctx.as_ref();
+        let enumerate_device_layer_properties =
+            instance.fp_v1_0().enumerate_device_layer_properties;
+        // with null VkPhysicalDevice
+        let mut property_count = 0;
+        let _ = unsafe {
+            enumerate_device_layer_properties(
+                vk::PhysicalDevice::null(),
+                &mut property_count,
+                null_mut(),
+            )
+        };
+        let mut property_count = 10;
+        let mut properties = vec![vk::LayerProperties::default(); property_count as usize];
+        let _ = unsafe {
+            enumerate_device_layer_properties(
+                vk::PhysicalDevice::null(),
+                &mut property_count,
+                properties.as_mut_ptr(),
+            )
+        };
+        // with not null VkPhysicalDevice
+        let physical_device = *unsafe { instance.enumerate_physical_devices() }
+            .unwrap()
+            .first()
+            .unwrap();
+        assert_ne!(physical_device, vk::PhysicalDevice::null());
+        let mut property_count = 0;
+        let _ = unsafe {
+            enumerate_device_layer_properties(physical_device, &mut property_count, null_mut())
+        };
+        let mut property_count = 10;
+        let mut properties = vec![vk::LayerProperties::default(); property_count as usize];
+        let _ = unsafe {
+            enumerate_device_layer_properties(
+                physical_device,
+                &mut property_count,
+                properties.as_mut_ptr(),
+            )
+        };
+    }
+}
+
 mod create_destroy_device {
     use super::*;
     #[test]
@@ -2219,10 +2347,4 @@ fn global_should_only_call_layer_ctor_once_even_if_multiple_instance_device_crea
 #[ignore]
 fn global_should_only_call_layer_ctor_once_even_if_multiple_calls_to_global_commands() {
     todo!()
-}
-
-#[test]
-#[ignore]
-fn global_enumerate_device_extension_properties_should_never_call_into_the_next_chain() {
-    todo!("Use NULL physical device, and 2 layers with non-null physical device")
 }
