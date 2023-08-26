@@ -657,18 +657,6 @@ mod get_instance_proc_addr {
             todo!()
         }
     }
-
-    #[test]
-    #[ignore]
-    fn test_layer_hooked_instance_commands_should_take_priority() {
-        todo!()
-    }
-
-    #[test]
-    #[ignore]
-    fn test_layer_hooked_device_commands_should_take_priority() {
-        todo!()
-    }
 }
 
 mod create_destroy_instance {
@@ -1286,12 +1274,6 @@ mod get_device_proc_addr {
             instance.get_device_proc_addr(device.handle(), destroy_swapchain_name.as_ptr())
         };
         assert!(destroy_swapchain.is_some());
-    }
-
-    #[test]
-    #[ignore]
-    fn test_layer_hooked_device_commands_should_take_priority() {
-        todo!()
     }
 
     #[test]

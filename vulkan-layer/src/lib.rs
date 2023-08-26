@@ -78,7 +78,7 @@
 //!
 //!     fn global_instance() -> &'static Global<Self> {
 //!         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-//!         &*GLOBAL
+//!         &GLOBAL
 //!     }
 //!
 //!     fn manifest() -> LayerManifest {
@@ -195,7 +195,7 @@
 //!
 //!     fn global_instance() -> &'static Global<Self> {
 //!         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-//!         &*GLOBAL
+//!         &GLOBAL
 //!     }
 //!
 //!     fn manifest() -> LayerManifest {
@@ -256,7 +256,7 @@
 //! #
 //! #     fn global_instance() -> &'static Global<Self> {
 //! #         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-//! #         &*GLOBAL
+//! #         &GLOBAL
 //! #     }
 //! #
 //! #     fn manifest() -> LayerManifest {

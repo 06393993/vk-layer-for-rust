@@ -37,5 +37,11 @@ mock! {
             _swapchain: vk::SwapchainKHR,
             _p_allocator: Option<&'a vk::AllocationCallbacks>,
         ) -> LayerResult<()>;
+
+        fn free_memory<'a>(
+            &self,
+            _memory: vk::DeviceMemory,
+            _p_allocator: Option<&'a vk::AllocationCallbacks>,
+        ) -> LayerResult<()>;
     }
 }

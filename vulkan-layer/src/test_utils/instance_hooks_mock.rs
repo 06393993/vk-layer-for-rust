@@ -35,5 +35,11 @@ mock! {
             _p_allocator: Option<&'a vk::AllocationCallbacks>,
             _p_device: &mut vk::Device,
         ) -> LayerResult<VkResult<()>>;
+
+        fn destroy_debug_utils_messenger_ext<'a>(
+            &self,
+            _messenger: vk::DebugUtilsMessengerEXT,
+            _p_allocator: Option<&'a vk::AllocationCallbacks>,
+        ) -> LayerResult<()>;
     }
 }

@@ -1003,7 +1003,7 @@ pub struct LayerManifest {
 ///
 ///     fn global_instance() -> &'static Global<Self> {
 ///         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-///         &*GLOBAL
+///         &GLOBAL
 ///     }
 ///
 ///     fn manifest() -> LayerManifest {
@@ -1069,7 +1069,7 @@ pub struct LayerManifest {
 ///
 ///     fn global_instance() -> &'static Global<Self> {
 ///         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-///         &*GLOBAL
+///         &GLOBAL
 ///     }
 ///
 ///     fn manifest() -> LayerManifest {
@@ -1314,7 +1314,7 @@ pub trait Layer: Sync + Default + 'static {
     /// impl Layer for MyLayer {
     ///     fn global_instance() -> &'static Global<Self> {
     ///         static GLOBAL: Lazy<Global<MyLayer>> = Lazy::new(Default::default);
-    ///         &*GLOBAL
+    ///         &GLOBAL
     ///     }
     ///
     ///     // Unrelated required items are omitted.

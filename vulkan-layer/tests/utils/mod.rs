@@ -865,6 +865,55 @@ static VULKAN_COMMANDS: Lazy<BTreeMap<VulkanCommandName, VulkanCommand>> = Lazy:
                 features: [ApiVersion::V1_0.into()].into(),
             },
         ),
+        (
+            DestroyDebugUtilsMessengerExt.into(),
+            VulkanCommand {
+                proc: {
+                    extern "system" fn destroy_debug_utils_messenger_ext(
+                        _: vk::Instance,
+                        messenger: vk::DebugUtilsMessengerEXT,
+                        _: *const vk::AllocationCallbacks,
+                    ) {
+                        if messenger == vk::DebugUtilsMessengerEXT::null() {
+                            return;
+                        }
+                        unimplemented!()
+                    }
+                    unsafe {
+                        std::mem::transmute::<
+                            vk::PFN_vkDestroyDebugUtilsMessengerEXT,
+                            vk::PFN_vkVoidFunction,
+                        >(destroy_debug_utils_messenger_ext)
+                    }
+                },
+                dispatch_kind: DispatchKind::Instance,
+                features: [Extension::EXTDebugUtils.into()].into(),
+            },
+        ),
+        (
+            FreeMemory.into(),
+            VulkanCommand {
+                proc: {
+                    extern "system" fn free_memory(
+                        _: vk::Device,
+                        memory: vk::DeviceMemory,
+                        _: *const vk::AllocationCallbacks,
+                    ) {
+                        if memory == vk::DeviceMemory::null() {
+                            return;
+                        }
+                        unimplemented!()
+                    }
+                    unsafe {
+                        std::mem::transmute::<vk::PFN_vkFreeMemory, vk::PFN_vkVoidFunction>(
+                            free_memory,
+                        )
+                    }
+                },
+                dispatch_kind: DispatchKind::Device,
+                features: [ApiVersion::V1_0.into()].into(),
+            },
+        ),
     ];
     commands.into_iter().collect()
 });

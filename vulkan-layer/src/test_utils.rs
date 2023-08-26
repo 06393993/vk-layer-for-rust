@@ -50,9 +50,9 @@ mod device_hooks_mock;
 mod global_hooks_mock;
 mod instance_hooks_mock;
 
-use device_hooks_mock::MockDeviceHooks;
-use global_hooks_mock::MockGlobalHooks;
-use instance_hooks_mock::MockInstanceHooks;
+pub use device_hooks_mock::MockDeviceHooks;
+pub use global_hooks_mock::MockGlobalHooks;
+pub use instance_hooks_mock::MockInstanceHooks;
 
 type Deleter<T> = Box<dyn FnOnce(&mut T) + Send + Sync>;
 
