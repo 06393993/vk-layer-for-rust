@@ -6,6 +6,11 @@ name = "pypi"
 [packages]
 black = "*"
 ruff = "*"
+mdformat = "*"
+mdformat-gfm = "*"
+mdformat-frontmatter = "*"
+mdformat-footnote = "*"
+importlib-metadata = "*"
 
 [dev-packages]
 
