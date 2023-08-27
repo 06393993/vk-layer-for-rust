@@ -12,25 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader};
 
-use clap::Parser;
+use anyhow::Result;
 use log::error;
 use serde::{Deserialize, Serialize};
 
-#[derive(Parser)]
-struct Cli {
-    /// The path to the output json file.
-    #[arg(long)]
-    output_path: PathBuf,
-
-    /// The left text of the coverage badge.
-    #[arg(long)]
-    label: String,
-
-    /// The json field name and the path to the json coverage report separated by colon.
-    coverage_report: PathBuf,
-}
+use super::CiCli as Cli;
 
 #[derive(Deserialize)]
 struct CoverageStats {
@@ -88,11 +76,7 @@ fn create_shield_badge(label: String, coverage_stats: &CoverageStats) -> ShieldB
     }
 }
 
-fn main() {
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Trace)
-        .init();
-    let cli = Cli::parse();
+pub(crate) fn main(cli: Cli) -> Result<()> {
     assert!(
         cli.coverage_report.exists(),
         "{} doesn't exist.",
@@ -123,4 +107,5 @@ fn main() {
     });
     serde_json::to_writer(&mut out_file, &shield_badge)
         .unwrap_or_else(|e| panic!("Failed to write the shield badge: {:?}", e));
+    Ok(())
 }

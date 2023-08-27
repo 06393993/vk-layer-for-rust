@@ -12,21 +12,74 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{env, process::Command};
+use std::path::PathBuf;
 
-fn main() {
-    let mut args = env::args().skip(1);
-    let subcommand = args.next().unwrap();
-    let cargo_args = ["run", "-p", "xtask", "--bin", &subcommand, "--"]
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .chain(args)
-        .collect::<Vec<_>>();
-    assert!(Command::new("cargo")
-        .args(cargo_args)
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap()
-        .success());
+use anyhow::Result;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+mod ci;
+mod codegen;
+mod fmt;
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// CI related commands.
+    Ci(CiCli),
+
+    /// Regenerate source.
+    Codegen,
+
+    /// Format source code.
+    Fmt(FmtCli),
+}
+
+#[derive(Args)]
+struct CiCli {
+    /// The path to the output json file.
+    #[arg(long)]
+    output_path: PathBuf,
+
+    /// The left text of the coverage badge.
+    #[arg(long)]
+    label: String,
+
+    /// The json field name and the path to the json coverage report separated by colon.
+    coverage_report: PathBuf,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum FmtFileType {
+    /// Format markdown files.
+    Markdown,
+}
+
+#[derive(Args)]
+struct FmtCli {
+    /// The file types to format. For example markdown. Default to all.
+    #[arg(long, value_enum)]
+    file_type: Vec<FmtFileType>,
+
+    /// Do not apply changes to files
+    #[arg(long)]
+    check: bool,
+}
+
+fn main() -> Result<()> {
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .filter_module("bindgen", log::LevelFilter::Error)
+        .init();
+
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Ci(ci_cli) => ci::main(ci_cli),
+        Commands::Codegen => codegen::main(),
+        Commands::Fmt(fmt_cli) => fmt::main(fmt_cli),
+    }
 }

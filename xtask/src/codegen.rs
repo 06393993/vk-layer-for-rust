@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Result;
 use log::info;
 use std::{
     env,
@@ -225,12 +226,7 @@ fn run_vulkan_layer_genvk(
     info!("{} completes generation.", output_file_path.display());
 }
 
-fn main() {
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Trace)
-        .filter_module("bindgen", log::LevelFilter::Error)
-        .init();
-
+pub(crate) fn main() -> Result<()> {
     let cargo_manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     assert!(cargo_manifest_dir.is_absolute());
     let mut project_root_dir = cargo_manifest_dir;
@@ -296,4 +292,5 @@ fn main() {
     for thread in threads {
         thread.join().unwrap();
     }
+    Ok(())
 }
