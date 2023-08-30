@@ -25,7 +25,7 @@ use log::{error, trace};
 use xshell::cmd;
 
 use crate::common::{
-    CancellationToken, CmdTask, ProgressReport, Target, TargetMetadata, TargetNode, Task,
+    CancellationToken, CmdsTask, ProgressReport, Target, TargetMetadata, TargetNode, Task,
     TaskContext, TaskMetadata, TypedTask,
 };
 
@@ -143,7 +143,7 @@ impl TargetNode for FormatMarkdownTarget {
                     Some(file_name) => file_name.to_string_lossy().to_string(),
                     None => file.display().to_string(),
                 };
-                let task = CmdTask::new(
+                let task = CmdsTask::new(
                     Some(task_name),
                     {
                         let format_config = Arc::clone(&format_config);
@@ -152,12 +152,11 @@ impl TargetNode for FormatMarkdownTarget {
                             let wrap = format_config.wrap.to_string();
                             let eol = format_config.markdown_end_of_line.to_string();
                             let mut cmd =
-                                cmd!(sh, "pipenv run mdformat --wrap {wrap} --end-of-line {eol}")
-                                    .quiet();
+                                cmd!(sh, "pipenv run mdformat --wrap {wrap} --end-of-line {eol}");
                             if format_config.check {
                                 cmd = cmd.arg("--check");
                             }
-                            cmd.arg(&file)
+                            vec![cmd.arg(&file)]
                         }
                     },
                     cancellation_token.clone(),

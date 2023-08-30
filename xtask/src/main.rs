@@ -101,7 +101,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let res = match &cli.command {
         Commands::Ci(ci_cli) => ci::main(ci_cli),
-        Commands::Codegen => codegen::main(),
+        Commands::Codegen => Ok(()),
         Commands::Fmt(_) => Ok(()),
     };
     res?;

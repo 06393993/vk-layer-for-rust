@@ -39,6 +39,7 @@ use wait_timeout::ChildExt;
 use xshell::{Cmd, Shell};
 
 use crate::{
+    codegen::CodegenTarget,
     fmt::{
         FormatConfig, FormatDiscoverFilesTarget, FormatFilesContext, FormatMarkdownTarget,
         FormatTarget,
@@ -107,7 +108,7 @@ impl super::Cli {
     pub(crate) fn create_targets(&self) -> BTreeSet<Target> {
         match &self.command {
             super::Commands::Ci(_) => BTreeSet::from([]),
-            super::Commands::Codegen => BTreeSet::from([]),
+            super::Commands::Codegen => BTreeSet::from([Target::Codegen]),
             super::Commands::Fmt(fmt_cli) => {
                 let file_types = fmt_cli.file_type.iter().cloned().collect::<BTreeSet<_>>();
                 if file_types.is_empty() {
@@ -135,6 +136,7 @@ pub(crate) enum Target {
     FormatDiscoverFiles,
     FormatMarkdown,
     Format,
+    Codegen,
 }
 
 #[derive(Clone)]
@@ -158,6 +160,7 @@ impl From<Target> for Box<dyn TargetNode> {
             Target::Format => Box::<FormatTarget>::default(),
             Target::FormatMarkdown => Box::<FormatMarkdownTarget>::default(),
             Target::FormatDiscoverFiles => Box::<FormatDiscoverFilesTarget>::default(),
+            Target::Codegen => Box::<CodegenTarget>::default(),
         }
     }
 }
@@ -175,6 +178,15 @@ impl From<u32> for TaskId {
 pub(crate) struct TaskMetadata {
     pub name: Option<String>,
     pub total_progress: u64,
+}
+
+impl Default for TaskMetadata {
+    fn default() -> Self {
+        Self {
+            name: None,
+            total_progress: 1,
+        }
+    }
 }
 
 pub(crate) trait Task: Send {
@@ -294,6 +306,7 @@ impl TaskScheduler for RayonTaskScheduler {
             std::thread::Builder::new()
                 .name("rayon task scheduler control thread".to_owned())
                 .spawn(move || {
+                    // TODO: Handle the panic here better.
                     rayon::scope(move |s| {
                         while let Ok(control_message) = control_message_rx.recv() {
                             match control_message {
@@ -486,92 +499,97 @@ impl<T: SimpleTypedTask> TypedTask for T {
     }
 }
 
-pub(crate) struct CmdTask {
+type CmdsBuilder = Box<dyn for<'a> Fn(&'a Shell) -> Vec<Cmd<'a>> + 'static + Send>;
+
+pub(crate) struct CmdsTask {
     sh: Shell,
     metadata: TaskMetadata,
-    cmd_builder: Box<dyn for<'a> Fn(&'a Shell) -> Cmd<'a> + 'static + Send>,
+    cmds_builder: CmdsBuilder,
     cancellation_token: CancellationToken,
 }
 
-impl CmdTask {
+impl CmdsTask {
     pub fn new(
         name: Option<String>,
-        cmd_builder: impl for<'a> Fn(&'a Shell) -> Cmd<'a> + 'static + Send,
+        cmds_builder: impl for<'a> Fn(&'a Shell) -> Vec<Cmd<'a>> + 'static + Send,
         cancellation_token: CancellationToken,
     ) -> Self {
         let sh = Shell::new().unwrap_or_else(|e| panic!("Failed to create shell: {:?}", e));
+        let total_progress = cmds_builder(&sh).len().try_into().unwrap();
         Self {
             sh,
             metadata: TaskMetadata {
                 name,
-                total_progress: 1,
+                total_progress,
             },
-            cmd_builder: Box::new(cmd_builder),
+            cmds_builder: Box::new(cmds_builder),
             cancellation_token,
         }
     }
 }
 
-impl SimpleTypedTask for CmdTask {
+impl SimpleTypedTask for CmdsTask {
     fn metadata(&self) -> &TaskMetadata {
         &self.metadata
     }
 
     fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {
         self.cancellation_token.check_cancelled()?;
-        let cmd = (self.cmd_builder)(&self.sh).quiet();
-        progress_report.set_message(format!("{}", cmd));
-        self.cancellation_token.check_cancelled()?;
-        let command_name = cmd.to_string();
-        let mut command: std::process::Command = cmd.into();
-        let mut proc = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn child process: {}", command_name))?;
-        let mut poll_interval = Duration::from_micros(1);
-        let status = loop {
-            let wait_result = proc
-                .wait_timeout(poll_interval)
-                .with_context(|| format!("wait for child process: {}", command_name))?;
-            if let Some(status) = wait_result {
-                break status;
-            }
-            if let Err(e) = self.cancellation_token.check_cancelled() {
-                if let Err(e) = proc.kill() {
-                    error!("Failed to kill process `{}': {}", command_name, e);
+        for cmd in (self.cmds_builder)(&self.sh) {
+            let cmd = cmd.quiet();
+            progress_report.set_message(format!("{}", cmd));
+            self.cancellation_token.check_cancelled()?;
+            let command_name = cmd.to_string();
+            let mut command: std::process::Command = cmd.into();
+            let mut proc = command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .with_context(|| format!("spawn child process: {}", command_name))?;
+            let mut poll_interval = Duration::from_micros(1);
+            let status = loop {
+                let wait_result = proc
+                    .wait_timeout(poll_interval)
+                    .with_context(|| format!("wait for child process: {}", command_name))?;
+                if let Some(status) = wait_result {
+                    break status;
                 }
-                return Err(e);
+                if let Err(e) = self.cancellation_token.check_cancelled() {
+                    if let Err(e) = proc.kill() {
+                        error!("Failed to kill process `{}': {}", command_name, e);
+                    }
+                    return Err(e);
+                }
+                poll_interval = std::cmp::Ord::min(poll_interval * 2, Duration::from_millis(500));
+            };
+            if !status.success() {
+                let output = proc
+                    .wait_with_output()
+                    .with_context(|| format!("wait with output for child: `{}'", command_name))?;
+                let mut message = BufWriter::new(Vec::<u8>::new());
+                writeln!(
+                    message,
+                    "command exited with non-zero code `{}`: {}",
+                    command_name, status
+                )
+                .context("write general error message")?;
+                writeln!(message).context("write a blank new line to the error message")?;
+                writeln!(message, "stdout:").context("write stdout tag to error message")?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                writeln!(message, "{}", stdout).context("write stdout to error message")?;
+                writeln!(message, "stderr:").context("write stderr tag to error message")?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                writeln!(message, "{}", stderr).context("write stderr to error message")?;
+                let message = message
+                    .into_inner()
+                    .context("unwrap the buffered writer for the error message")?;
+                let message = String::from_utf8_lossy(&message).to_string();
+                return Err(Error::msg(message));
             }
-            poll_interval = std::cmp::Ord::min(poll_interval * 2, Duration::from_millis(500));
-        };
-        if !status.success() {
-            let output = proc
-                .wait_with_output()
-                .with_context(|| format!("wait with output for child: `{}'", command_name))?;
-            let mut message = BufWriter::new(Vec::<u8>::new());
-            writeln!(
-                message,
-                "command exited with non-zero code `{}`: {}",
-                command_name, status
-            )
-            .context("write general error message")?;
-            writeln!(message).context("write a blank new line to the error message")?;
-            writeln!(message, "stdout:").context("write stdout tag to error message")?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            writeln!(message, "{}", stdout).context("write stdout to error message")?;
-            writeln!(message, "stderr:").context("write stderr tag to error message")?;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            writeln!(message, "{}", stderr).context("write stderr to error message")?;
-            let message = message
-                .into_inner()
-                .context("unwrap the buffered writer for the error message")?;
-            let message = String::from_utf8_lossy(&message).to_string();
-            return Err(Error::msg(message));
-        }
 
-        progress_report.increase(1);
+            progress_report.increase(1);
+        }
         Ok(())
     }
 }
