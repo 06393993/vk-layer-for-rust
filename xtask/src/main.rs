@@ -31,14 +31,13 @@ use log::{error, info};
 
 mod ci;
 mod codegen;
+mod common;
 mod fmt;
 
-use fmt::{
-    CancellationTokenSource, RayonTaskScheduler, TargetGraph, TargetId, TargetSchedulerMessage,
-    TaskId,
+use common::{
+    CancellationTokenSource, RayonTaskScheduler, TargetGraph, TargetId, TargetMetadata,
+    TargetSchedulerMessage, TaskId, TaskMetadata,
 };
-
-use crate::fmt::{TargetMetadata, TaskMetadata};
 
 #[derive(Parser)]
 struct Cli {
