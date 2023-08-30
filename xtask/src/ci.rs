@@ -76,7 +76,7 @@ fn create_shield_badge(label: String, coverage_stats: &CoverageStats) -> ShieldB
     }
 }
 
-pub(crate) fn main(cli: Cli) -> Result<()> {
+pub(crate) fn main(cli: &Cli) -> Result<()> {
     assert!(
         cli.coverage_report.exists(),
         "{} doesn't exist.",
@@ -97,7 +97,7 @@ pub(crate) fn main(cli: Cli) -> Result<()> {
         "Unexpected data field length: {}",
         report.data.len()
     );
-    let shield_badge = create_shield_badge(cli.label, &report.data[0].totals.lines);
+    let shield_badge = create_shield_badge(cli.label.clone(), &report.data[0].totals.lines);
     let mut out_file = File::create(&cli.output_path).unwrap_or_else(|e| {
         panic!(
             "Failed to open the output file {}: {:?}",
