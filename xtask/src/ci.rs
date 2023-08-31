@@ -12,13 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fs::File, io::BufReader};
+use std::{
+    collections::BTreeSet,
+    fs::File,
+    io::BufReader,
+    sync::{Arc, Mutex},
+};
 
-use anyhow::Result;
+use anyhow::{ensure, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::CiCli as Cli;
+use crate::{
+    common::{
+        CancellationToken, SimpleTypedTask, Target, TargetMetadata, TargetNode, Task, TaskContext,
+        TaskMetadata,
+    },
+    CiCli,
+};
 
 #[derive(Deserialize)]
 struct CoverageStats {
@@ -76,36 +87,96 @@ fn create_shield_badge(label: String, coverage_stats: &CoverageStats) -> ShieldB
     }
 }
 
-pub(crate) fn main(cli: &Cli) -> Result<()> {
-    assert!(
-        cli.coverage_report.exists(),
-        "{} doesn't exist.",
-        cli.coverage_report.display()
-    );
-    let file = File::open(&cli.coverage_report).unwrap_or_else(|e| {
-        panic!(
-            "Failed to open {} to read: {:?}",
-            cli.coverage_report.display(),
-            e
-        )
-    });
-    let reader = BufReader::new(file);
-    let report: CoverageReport = serde_json::from_reader(reader)
-        .unwrap_or_else(|e| panic!("Failed to parse the report: {:?}", e));
-    assert!(
-        !report.data.is_empty(),
-        "Unexpected data field length: {}",
-        report.data.len()
-    );
-    let shield_badge = create_shield_badge(cli.label.clone(), &report.data[0].totals.lines);
-    let mut out_file = File::create(&cli.output_path).unwrap_or_else(|e| {
-        panic!(
-            "Failed to open the output file {}: {:?}",
-            cli.output_path.display(),
-            e
-        )
-    });
-    serde_json::to_writer(&mut out_file, &shield_badge)
-        .unwrap_or_else(|e| panic!("Failed to write the shield badge: {:?}", e));
-    Ok(())
+struct CoverageBadgeTask {
+    metadata: TaskMetadata,
+    cancellation_token: CancellationToken,
+    ci_cli: CiCli,
+}
+
+impl SimpleTypedTask for CoverageBadgeTask {
+    fn execute(&self, progress_report: Box<dyn crate::common::ProgressReport>) -> Result<()> {
+        let cli = &self.ci_cli;
+        self.cancellation_token.check_cancelled()?;
+        ensure!(
+            cli.coverage_report.exists(),
+            "{} doesn't exist.",
+            cli.coverage_report.display()
+        );
+        self.cancellation_token.check_cancelled()?;
+        let file = File::open(&cli.coverage_report).with_context(|| {
+            format!("open coverage report at {}", cli.coverage_report.display())
+        })?;
+        self.cancellation_token.check_cancelled()?;
+        let reader = BufReader::new(file);
+        let report: CoverageReport = serde_json::from_reader(reader)
+            .with_context(|| format!("parse the report at {}", cli.coverage_report.display()))?;
+        self.cancellation_token.check_cancelled()?;
+        ensure!(
+            !report.data.is_empty(),
+            "Unexpected data field length: {}",
+            report.data.len()
+        );
+        let shield_badge = create_shield_badge(cli.label.clone(), &report.data[0].totals.lines);
+        self.cancellation_token.check_cancelled()?;
+        let mut out_file = File::create(&cli.output_path).with_context(|| {
+            format!(
+                "create output file for shield badge at {}",
+                cli.output_path.display()
+            )
+        })?;
+        self.cancellation_token.check_cancelled()?;
+        serde_json::to_writer(&mut out_file, &shield_badge)
+            .with_context(|| format!("write the sheild badge to {}", cli.output_path.display()))?;
+        progress_report.finish();
+        Ok(())
+    }
+
+    fn metadata(&self) -> &TaskMetadata {
+        &self.metadata
+    }
+}
+
+pub(crate) struct CiTarget {
+    metadata: TargetMetadata,
+}
+
+impl TargetNode for CiTarget {
+    fn metadata(&self) -> &TargetMetadata {
+        &self.metadata
+    }
+
+    fn dependencies(&self) -> BTreeSet<Target> {
+        BTreeSet::new()
+    }
+
+    fn create_tasks(
+        &self,
+        context: Arc<Mutex<TaskContext>>,
+        cancellation_token: CancellationToken,
+    ) -> Vec<Box<dyn Task>> {
+        let ci_cli = context
+            .lock()
+            .unwrap()
+            .ci_cli
+            .take()
+            .expect("missing CI CLI");
+        vec![Box::new(CoverageBadgeTask {
+            metadata: TaskMetadata {
+                name: Some("cov_badge".to_owned()),
+                total_progress: 1,
+            },
+            cancellation_token,
+            ci_cli,
+        })]
+    }
+}
+
+impl Default for CiTarget {
+    fn default() -> Self {
+        Self {
+            metadata: TargetMetadata {
+                name: "ci".to_owned(),
+            },
+        }
+    }
 }

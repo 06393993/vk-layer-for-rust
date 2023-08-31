@@ -99,13 +99,6 @@ fn main() -> Result<()> {
         .context("initialize logger")?;
 
     let cli = Cli::parse();
-    let res = match &cli.command {
-        Commands::Ci(ci_cli) => ci::main(ci_cli),
-        Commands::Codegen => Ok(()),
-        Commands::Fmt(_) => Ok(()),
-    };
-    res?;
-
     let targets = cli.create_targets();
     let target_graph = TargetGraph::create_from_targets(targets);
     let cancellation_token_source = Arc::<CancellationTokenSource>::default();

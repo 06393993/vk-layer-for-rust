@@ -39,12 +39,13 @@ use wait_timeout::ChildExt;
 use xshell::{Cmd, Shell};
 
 use crate::{
+    ci::CiTarget,
     codegen::CodegenTarget,
     fmt::{
         FormatConfig, FormatDiscoverFilesTarget, FormatFilesContext, FormatMarkdownTarget,
         FormatTarget,
     },
-    Commands, FmtFileType,
+    CiCli, Commands, FmtFileType,
 };
 
 pub(crate) struct CancellationTokenSource(Arc<AtomicBool>);
@@ -89,17 +90,22 @@ impl CancellationToken {
 pub(crate) struct TaskContext {
     pub format_config: Arc<FormatConfig>,
     pub format_files: Option<Arc<FormatFilesContext>>,
+    pub ci_cli: Option<CiCli>,
 }
 
 impl From<super::Cli> for TaskContext {
     fn from(cli: super::Cli) -> Self {
         let mut format_config = FormatConfig::default();
-        if let Commands::Fmt(fmt_cli) = cli.command {
-            format_config.check = fmt_cli.check;
+        let mut ci_cli = None;
+        match cli.command {
+            Commands::Fmt(fmt_cli) => format_config.check = fmt_cli.check,
+            Commands::Ci(input) => ci_cli = Some(input),
+            Commands::Codegen => {}
         }
         Self {
             format_files: None,
             format_config: Arc::new(format_config),
+            ci_cli,
         }
     }
 }
@@ -107,7 +113,7 @@ impl From<super::Cli> for TaskContext {
 impl super::Cli {
     pub(crate) fn create_targets(&self) -> BTreeSet<Target> {
         match &self.command {
-            super::Commands::Ci(_) => BTreeSet::from([]),
+            super::Commands::Ci(_) => BTreeSet::from([Target::Ci]),
             super::Commands::Codegen => BTreeSet::from([Target::Codegen]),
             super::Commands::Fmt(fmt_cli) => {
                 let file_types = fmt_cli.file_type.iter().cloned().collect::<BTreeSet<_>>();
@@ -137,6 +143,7 @@ pub(crate) enum Target {
     FormatMarkdown,
     Format,
     Codegen,
+    Ci,
 }
 
 #[derive(Clone)]
@@ -161,6 +168,7 @@ impl From<Target> for Box<dyn TargetNode> {
             Target::FormatMarkdown => Box::<FormatMarkdownTarget>::default(),
             Target::FormatDiscoverFiles => Box::<FormatDiscoverFilesTarget>::default(),
             Target::Codegen => Box::<CodegenTarget>::default(),
+            Target::Ci => Box::<CiTarget>::default(),
         }
     }
 }
