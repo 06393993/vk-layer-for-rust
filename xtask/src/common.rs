@@ -152,7 +152,7 @@ pub(crate) struct TargetMetadata {
 }
 
 pub(crate) trait TargetNode {
-    fn metadata(&self) -> &TargetMetadata;
+    fn metadata(&self) -> TargetMetadata;
     fn dependencies(&self) -> BTreeSet<Target>;
     fn create_tasks(
         &self,
@@ -198,7 +198,10 @@ impl Default for TaskMetadata {
 }
 
 pub(crate) trait Task: Send {
-    fn metadata(&self) -> &TaskMetadata;
+    fn metadata(&self) -> TaskMetadata {
+        Default::default()
+    }
+
     fn execute(
         &self,
         context: Arc<Mutex<TaskContext>>,
@@ -462,13 +465,16 @@ impl Drop for RayonTaskScheduler {
 pub(crate) trait TypedTask: Send {
     type OutputType;
 
-    fn metadata(&self) -> &TaskMetadata;
+    fn metadata(&self) -> TaskMetadata {
+        Default::default()
+    }
+
     fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<Self::OutputType>;
     fn merge_output(&self, context: &mut TaskContext, output: Self::OutputType) -> Result<()>;
 }
 
 impl<T: TypedTask> Task for T {
-    fn metadata(&self) -> &TaskMetadata {
+    fn metadata(&self) -> TaskMetadata {
         <Self as TypedTask>::metadata(self)
     }
 
@@ -477,7 +483,8 @@ impl<T: TypedTask> Task for T {
         context: Arc<Mutex<TaskContext>>,
         progress_report: Box<dyn ProgressReport>,
     ) -> Result<()> {
-        let task_name = self.metadata().name.as_deref().unwrap_or("(anonymous)");
+        let task_metadata = self.metadata();
+        let task_name = task_metadata.name.as_deref().unwrap_or("(anonymous)");
         let output = <Self as TypedTask>::execute(self, progress_report)
             .with_context(|| format!("executing task: {}", task_name))?;
         self.merge_output(&mut context.lock().unwrap(), output)
@@ -487,14 +494,17 @@ impl<T: TypedTask> Task for T {
 }
 
 pub(crate) trait SimpleTypedTask: Send {
-    fn metadata(&self) -> &TaskMetadata;
+    fn metadata(&self) -> TaskMetadata {
+        Default::default()
+    }
+
     fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()>;
 }
 
 impl<T: SimpleTypedTask> TypedTask for T {
     type OutputType = ();
 
-    fn metadata(&self) -> &TaskMetadata {
+    fn metadata(&self) -> TaskMetadata {
         <Self as SimpleTypedTask>::metadata(self)
     }
 
@@ -537,8 +547,8 @@ impl CmdsTask {
 }
 
 impl SimpleTypedTask for CmdsTask {
-    fn metadata(&self) -> &TaskMetadata {
-        &self.metadata
+    fn metadata(&self) -> TaskMetadata {
+        self.metadata.clone()
     }
 
     fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {

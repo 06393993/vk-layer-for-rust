@@ -26,7 +26,7 @@ use xshell::cmd;
 
 use crate::common::{
     CancellationToken, CmdsTask, ProgressReport, Target, TargetMetadata, TargetNode, Task,
-    TaskContext, TaskMetadata, TypedTask,
+    TaskContext, TypedTask,
 };
 
 pub(crate) struct FormatFilesContext {
@@ -53,13 +53,14 @@ impl Default for FormatConfig {
     }
 }
 
-pub(crate) struct FormatTarget {
-    metadata: TargetMetadata,
-}
+#[derive(Default)]
+pub(crate) struct FormatTarget;
 
 impl TargetNode for FormatTarget {
-    fn metadata(&self) -> &TargetMetadata {
-        &self.metadata
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "fmt".to_owned(),
+        }
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
@@ -68,16 +69,6 @@ impl TargetNode for FormatTarget {
 
     fn create_tasks(&self, _: Arc<Mutex<TaskContext>>, _: CancellationToken) -> Vec<Box<dyn Task>> {
         vec![]
-    }
-}
-
-impl Default for FormatTarget {
-    fn default() -> Self {
-        Self {
-            metadata: TargetMetadata {
-                name: "fmt".to_owned(),
-            },
-        }
     }
 }
 
@@ -101,23 +92,14 @@ impl Display for MarkdownFormatEndOfLine {
     }
 }
 
-pub(crate) struct FormatMarkdownTarget {
-    metadata: TargetMetadata,
-}
-
-impl Default for FormatMarkdownTarget {
-    fn default() -> Self {
-        Self {
-            metadata: TargetMetadata {
-                name: "fmt_md".to_owned(),
-            },
-        }
-    }
-}
+#[derive(Default)]
+pub(crate) struct FormatMarkdownTarget;
 
 impl TargetNode for FormatMarkdownTarget {
-    fn metadata(&self) -> &TargetMetadata {
-        &self.metadata
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "fmt_md".to_owned(),
+        }
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
@@ -167,23 +149,14 @@ impl TargetNode for FormatMarkdownTarget {
     }
 }
 
-pub(crate) struct FormatDiscoverFilesTarget {
-    metadata: TargetMetadata,
-}
-
-impl Default for FormatDiscoverFilesTarget {
-    fn default() -> Self {
-        Self {
-            metadata: TargetMetadata {
-                name: "discover_fmt".to_owned(),
-            },
-        }
-    }
-}
+#[derive(Default)]
+pub(crate) struct FormatDiscoverFilesTarget;
 
 impl TargetNode for FormatDiscoverFilesTarget {
-    fn metadata(&self) -> &TargetMetadata {
-        &self.metadata
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "discover_fmt".to_owned(),
+        }
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
@@ -196,16 +169,11 @@ impl TargetNode for FormatDiscoverFilesTarget {
         cancellation_token: CancellationToken,
     ) -> Vec<Box<dyn Task>> {
         struct FormatDiscoverFilesTask {
-            metadata: TaskMetadata,
             cancellation_token: CancellationToken,
         }
 
         impl TypedTask for FormatDiscoverFilesTask {
             type OutputType = FormatFilesContext;
-
-            fn metadata(&self) -> &TaskMetadata {
-                &self.metadata
-            }
 
             fn merge_output(
                 &self,
@@ -253,12 +221,6 @@ impl TargetNode for FormatDiscoverFilesTarget {
             }
         }
 
-        vec![Box::new(FormatDiscoverFilesTask {
-            metadata: TaskMetadata {
-                name: None,
-                total_progress: 1,
-            },
-            cancellation_token,
-        })]
+        vec![Box::new(FormatDiscoverFilesTask { cancellation_token })]
     }
 }

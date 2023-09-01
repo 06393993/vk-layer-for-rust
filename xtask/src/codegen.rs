@@ -42,7 +42,6 @@ fn current_year() -> u64 {
 }
 
 struct BindgenTask {
-    metadata: TaskMetadata,
     rustfmt_path: PathBuf,
     out_path: PathBuf,
     preamble: String,
@@ -50,22 +49,15 @@ struct BindgenTask {
     cancellation_token: CancellationToken,
 }
 
-impl BindgenTask {
-    fn build_metadata(&mut self) -> &mut Self {
-        self.metadata = TaskMetadata {
+impl SimpleTypedTask for BindgenTask {
+    fn metadata(&self) -> TaskMetadata {
+        TaskMetadata {
             name: Some(match self.out_path.file_name() {
                 Some(out_path) => out_path.to_string_lossy().to_string(),
                 None => self.out_path.display().to_string(),
             }),
             total_progress: 1,
-        };
-        self
-    }
-}
-
-impl SimpleTypedTask for BindgenTask {
-    fn metadata(&self) -> &TaskMetadata {
-        &self.metadata
+        }
     }
 
     fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {
@@ -109,7 +101,6 @@ fn guess_python_command() -> Option<&'static str> {
 }
 
 pub(crate) struct CodegenTarget {
-    metadata: TargetMetadata,
     vulkan_headers_dir: PathBuf,
     vk_layer_general_out: PathBuf,
     vk_layer_platform_specific_out: PathBuf,
@@ -195,8 +186,7 @@ pub use unix::*;
 pub use windows::*;
 ",
         );
-        let mut general_binding_task = BindgenTask {
-            metadata: Default::default(),
+        let general_binding_task = BindgenTask {
             rustfmt_path: rustfmt_path.clone(),
             out_path: self.vk_layer_general_out.clone(),
             preamble,
@@ -218,9 +208,7 @@ pub use windows::*;
             }),
             cancellation_token: cancellation_token.clone(),
         };
-        general_binding_task.build_metadata();
-        let mut platform_specific_binding_task = BindgenTask {
-            metadata: Default::default(),
+        let platform_specific_binding_task = BindgenTask {
             rustfmt_path,
             out_path: self.vk_layer_platform_specific_out.clone(),
             preamble: license_comments,
@@ -234,7 +222,6 @@ pub use windows::*;
             }),
             cancellation_token,
         };
-        platform_specific_binding_task.build_metadata();
         vec![
             Box::new(general_binding_task),
             Box::new(platform_specific_binding_task),
@@ -287,8 +274,10 @@ pub use windows::*;
 }
 
 impl TargetNode for CodegenTarget {
-    fn metadata(&self) -> &TargetMetadata {
-        &self.metadata
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "codegen".to_string(),
+        }
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
@@ -347,9 +336,6 @@ impl Default for CodegenTarget {
         vulkan_layer_generated_dir.push("src");
 
         Self {
-            metadata: TargetMetadata {
-                name: "codegen".to_string(),
-            },
             vulkan_headers_dir,
             vk_layer_general_out,
             vk_layer_platform_specific_out,

@@ -88,7 +88,6 @@ fn create_shield_badge(label: String, coverage_stats: &CoverageStats) -> ShieldB
 }
 
 struct CoverageBadgeTask {
-    metadata: TaskMetadata,
     cancellation_token: CancellationToken,
     ci_cli: CiCli,
 }
@@ -131,18 +130,22 @@ impl SimpleTypedTask for CoverageBadgeTask {
         Ok(())
     }
 
-    fn metadata(&self) -> &TaskMetadata {
-        &self.metadata
+    fn metadata(&self) -> TaskMetadata {
+        TaskMetadata {
+            name: Some("cov_badge".to_owned()),
+            total_progress: 1,
+        }
     }
 }
 
-pub(crate) struct CiTarget {
-    metadata: TargetMetadata,
-}
+#[derive(Default)]
+pub(crate) struct CiTarget;
 
 impl TargetNode for CiTarget {
-    fn metadata(&self) -> &TargetMetadata {
-        &self.metadata
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "ci".to_owned(),
+        }
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
@@ -161,22 +164,8 @@ impl TargetNode for CiTarget {
             .take()
             .expect("missing CI CLI");
         vec![Box::new(CoverageBadgeTask {
-            metadata: TaskMetadata {
-                name: Some("cov_badge".to_owned()),
-                total_progress: 1,
-            },
             cancellation_token,
             ci_cli,
         })]
-    }
-}
-
-impl Default for CiTarget {
-    fn default() -> Self {
-        Self {
-            metadata: TargetMetadata {
-                name: "ci".to_owned(),
-            },
-        }
     }
 }
