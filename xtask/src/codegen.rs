@@ -14,7 +14,6 @@
 
 use anyhow::{Context, Result};
 use std::{
-    collections::BTreeSet,
     env,
     fs::File,
     io::Write,
@@ -28,8 +27,8 @@ use xshell::cmd;
 use bindgen::EnumVariation;
 
 use crate::common::{
-    CancellationToken, CmdsTask, ProgressReport, SimpleTypedTask, Target, TargetMetadata,
-    TargetNode, Task, TaskContext, TaskMetadata,
+    CancellationToken, CmdsTask, ProgressReport, SimpleTypedTask, TargetMetadata, TargetNode, Task,
+    TaskContext, TaskMetadata,
 };
 
 // May not be precise, but should be enough for generating copyright comments.
@@ -278,10 +277,6 @@ impl TargetNode for CodegenTarget {
         TargetMetadata {
             name: "codegen".to_string(),
         }
-    }
-
-    fn dependencies(&self) -> BTreeSet<Target> {
-        BTreeSet::new()
     }
 
     fn create_tasks(

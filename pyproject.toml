@@ -1,9 +1,3 @@
-[tool.black]
-line-length = 100
-target-version = ['py39']
-extend-exclude = '^/third_party/.*'
-preview = true
-
 [tool.ruff]
 exclude = [
     ".bzr",

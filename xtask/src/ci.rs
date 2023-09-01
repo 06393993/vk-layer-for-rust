@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeSet,
     fs::File,
     io::BufReader,
     sync::{Arc, Mutex},
@@ -25,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::{
-        CancellationToken, SimpleTypedTask, Target, TargetMetadata, TargetNode, Task, TaskContext,
+        CancellationToken, SimpleTypedTask, TargetMetadata, TargetNode, Task, TaskContext,
         TaskMetadata,
     },
     CiCli,
@@ -146,10 +145,6 @@ impl TargetNode for CiTarget {
         TargetMetadata {
             name: "ci".to_owned(),
         }
-    }
-
-    fn dependencies(&self) -> BTreeSet<Target> {
-        BTreeSet::new()
     }
 
     fn create_tasks(

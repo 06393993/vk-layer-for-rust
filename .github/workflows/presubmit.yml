@@ -116,8 +116,8 @@ jobs:
             target/llvm-cov
             target/coverage_badge.json
 
-  rust-fmt:
-    name: Rust format
+  format-and-lint:
+    name: Format and lint
     strategy:
       fail-fast: false
       matrix:
@@ -132,15 +132,6 @@ jobs:
         uses: dtolnay/rust-toolchain@f2f3c4b315c5bb8415dbb043af44ec90f68ae503
         with:
           components: rustfmt
-      - run: cargo +nightly fmt --check
-
-  py-lint:
-    name: Python lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v4 
         with:
           python-version: '3.9.13' 
@@ -148,9 +139,9 @@ jobs:
       - name: Install pipenv
         run: python -m pip install pipenv==2023.7.23
       - run: pipenv install
-      - run: pipenv run black --check .
+      - run: cargo xtask fmt --check
       - run: pipenv run ruff check .
-  
+
   codegen:
     name: Rust codegen
     strategy:

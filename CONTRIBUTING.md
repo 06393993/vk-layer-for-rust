@@ -30,22 +30,34 @@ All submissions, including submissions by project members, require review. We us
 
 ### Format the code
 
-Presubmit will fail if the code is not properly format.
+Presubmit will fail if the code is not properly format. Run `cargo xtask fmt` to format all the
+files.
 
 #### Rust
 
-Nightly features in `rustfmt` is used, so run `cargo +nightly fmt` to format the entire project.
+Nightly features in `rustfmt` is used, so nightly Rust toolchain with `rustfmt` is required to
+format the rust code. `cargo +nightly fmt` or `cargo xtask fmt --file-type rust` can be used to
+format Rust source files.
 
 #### Python
 
-Python scripts are used to generate some Rust source files. Use
-[black](https://black.readthedocs.io/en/stable) to format python code:
+Python scripts are used to generate some Rust source files.
+[black](https://black.readthedocs.io/en/stable) is used to format python code.
+[ruff](https://github.com/astral-sh/ruff) is used to lint the python scripts. Make sure they are
+installed.
+
+The config for the black formatter is hard coded in the xtask source file, and we don't use
+`pyproject.toml` to configure the behavior of the black formatter.
+
+Use [black](https://black.readthedocs.io/en/stable) to format python code:
 
 ```bash
 $ python -m black .
 All done! ✨ 🍰 ✨
 4 files left unchanged.
 ```
+
+Alternatively, one can use `cargo xtask fmt --file-type python`.
 
 Use [ruff](https://github.com/astral-sh/ruff) to lint the python scripts:
 

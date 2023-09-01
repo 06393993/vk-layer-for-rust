@@ -21,7 +21,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use ignore::{types::TypesBuilder, WalkBuilder};
-use log::{error, trace};
+use log::error;
 use xshell::cmd;
 
 use crate::common::{
@@ -31,12 +31,15 @@ use crate::common::{
 
 pub(crate) struct FormatFilesContext {
     markdown_files: Vec<PathBuf>,
+    python_files: Vec<PathBuf>,
 }
 
 pub(crate) struct FormatConfig {
     pub wrap: u32,
     pub check: bool,
     pub markdown_end_of_line: MarkdownFormatEndOfLine,
+    pub black_preview: bool,
+    pub black_target_version: &'static str,
 }
 
 impl Default for FormatConfig {
@@ -49,6 +52,8 @@ impl Default for FormatConfig {
             wrap: 100,
             check: false,
             markdown_end_of_line,
+            black_preview: true,
+            black_target_version: "py39",
         }
     }
 }
@@ -64,11 +69,11 @@ impl TargetNode for FormatTarget {
     }
 
     fn dependencies(&self) -> BTreeSet<Target> {
-        BTreeSet::from([Target::FormatMarkdown])
-    }
-
-    fn create_tasks(&self, _: Arc<Mutex<TaskContext>>, _: CancellationToken) -> Vec<Box<dyn Task>> {
-        vec![]
+        BTreeSet::from([
+            Target::FormatMarkdown,
+            Target::FormatRust,
+            Target::FormatPython,
+        ])
     }
 }
 
@@ -159,10 +164,6 @@ impl TargetNode for FormatDiscoverFilesTarget {
         }
     }
 
-    fn dependencies(&self) -> BTreeSet<Target> {
-        BTreeSet::new()
-    }
-
     fn create_tasks(
         &self,
         _: Arc<Mutex<TaskContext>>,
@@ -189,14 +190,26 @@ impl TargetNode for FormatDiscoverFilesTarget {
                 progress_report: Box<dyn ProgressReport>,
             ) -> Result<Self::OutputType> {
                 self.cancellation_token.check_cancelled()?;
-                let md_type = TypesBuilder::new()
+                let file_type = TypesBuilder::new()
+                    .add_defaults()
+                    .select("md")
+                    .select("py")
+                    .build()
+                    .context("build the file type filter")?;
+                let md_file_type = TypesBuilder::new()
                     .add_defaults()
                     .select("md")
                     .build()
-                    .context("build the markdown type filter")?;
+                    .context("build the markdown file type filter")?;
+                let py_file_type = TypesBuilder::new()
+                    .add_defaults()
+                    .select("py")
+                    .build()
+                    .context("build the markdown file type filter")?;
                 self.cancellation_token.check_cancelled()?;
-                let files = WalkBuilder::new("./").types(md_type).build();
+                let files = WalkBuilder::new("./").types(file_type).build();
                 let mut markdown_files = vec![];
+                let mut python_files = vec![];
                 for res in files {
                     self.cancellation_token.check_cancelled()?;
                     let entry = match res {
@@ -206,21 +219,124 @@ impl TargetNode for FormatDiscoverFilesTarget {
                         }
                         Ok(entry) => entry,
                     };
-                    let is_file = entry
+                    let is_dir = entry
                         .file_type()
-                        .map(|file_type| file_type.is_file())
+                        .map(|file_type| file_type.is_dir())
                         .unwrap_or(false);
-                    if !is_file {
-                        trace!("Skip directory {}", entry.path().display());
-                        continue;
+                    if md_file_type.matched(entry.path(), is_dir).is_whitelist() {
+                        progress_report.set_message(format!(
+                            "discovered markdown file: {}",
+                            entry.path().display()
+                        ));
+                        markdown_files.push(entry.path().to_owned())
+                    } else if py_file_type.matched(entry.path(), is_dir).is_whitelist() {
+                        progress_report.set_message(format!(
+                            "discovered python file: {}",
+                            entry.path().display()
+                        ));
+                        python_files.push(entry.path().to_owned());
                     }
-                    progress_report.set_message(format!("discovered: {}", entry.path().display()));
-                    markdown_files.push(entry.path().to_owned())
                 }
-                Ok(FormatFilesContext { markdown_files })
+                Ok(FormatFilesContext {
+                    markdown_files,
+                    python_files,
+                })
             }
         }
 
         vec![Box::new(FormatDiscoverFilesTask { cancellation_token })]
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct FormatRustTarget;
+
+impl TargetNode for FormatRustTarget {
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "fmt_rust".to_owned(),
+        }
+    }
+
+    fn create_tasks(
+        &self,
+        context: Arc<Mutex<TaskContext>>,
+        cancellation_token: CancellationToken,
+    ) -> Vec<Box<dyn Task>> {
+        let format_config = Arc::clone(&context.lock().unwrap().format_config);
+        vec![Box::new(CmdsTask::new(
+            None,
+            move |sh| {
+                // TODO: check if nightly cargo and rustfmt are installed
+                let mut cmd = cmd!(sh, "rustup run nightly cargo fmt");
+                if format_config.check {
+                    cmd = cmd.arg("--check");
+                }
+                vec![cmd]
+            },
+            cancellation_token,
+        ))]
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct FormatPythonTarget;
+
+impl TargetNode for FormatPythonTarget {
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata {
+            name: "fmt_py".to_owned(),
+        }
+    }
+
+    fn dependencies(&self) -> BTreeSet<Target> {
+        BTreeSet::from([Target::FormatDiscoverFiles])
+    }
+
+    fn create_tasks(
+        &self,
+        context: Arc<Mutex<TaskContext>>,
+        cancellation_token: CancellationToken,
+    ) -> Vec<Box<dyn Task>> {
+        let format_config = Arc::clone(&context.lock().unwrap().format_config);
+        let format_files = context.lock().unwrap().format_files.clone();
+        let format_files = format_files.expect(
+            "Format file contexts are missing. Please check if all dependencies are properly \
+             specified.",
+        );
+        format_files
+            .python_files
+            .iter()
+            .map(|file| -> Box<dyn Task> {
+                let task_name = match file.file_name() {
+                    Some(file_name) => file_name.to_string_lossy().to_string(),
+                    None => file.display().to_string(),
+                };
+                let task = CmdsTask::new(
+                    Some(task_name),
+                    {
+                        let format_config = Arc::clone(&format_config);
+                        let file = file.to_owned();
+                        move |sh| {
+                            // TODO: check if pipenv and black are installed
+                            let mut cmd = cmd!(sh, "pipenv run black")
+                                .arg("--line-length")
+                                .arg(format_config.wrap.to_string())
+                                .arg("--target-version")
+                                .arg(format_config.black_target_version);
+                            if format_config.black_preview {
+                                cmd = cmd.arg("--preview");
+                            }
+                            if format_config.check {
+                                cmd = cmd.arg("--check");
+                            }
+                            vec![cmd.arg(&file)]
+                        }
+                    },
+                    cancellation_token.clone(),
+                );
+                Box::new(task)
+            })
+            .collect()
     }
 }

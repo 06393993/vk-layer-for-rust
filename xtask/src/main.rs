@@ -75,6 +75,10 @@ struct CiCli {
 enum FmtFileType {
     /// Format markdown files.
     Markdown,
+    /// Format Rust files.
+    Rust,
+    /// Format python files.
+    Python,
 }
 
 #[derive(Args)]

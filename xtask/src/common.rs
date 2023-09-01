@@ -43,7 +43,7 @@ use crate::{
     codegen::CodegenTarget,
     fmt::{
         FormatConfig, FormatDiscoverFilesTarget, FormatFilesContext, FormatMarkdownTarget,
-        FormatTarget,
+        FormatPythonTarget, FormatRustTarget, FormatTarget,
     },
     CiCli, Commands, FmtFileType,
 };
@@ -124,6 +124,8 @@ impl super::Cli {
                     .into_iter()
                     .map(|file_type| match file_type {
                         FmtFileType::Markdown => Target::FormatMarkdown,
+                        FmtFileType::Rust => Target::FormatRust,
+                        FmtFileType::Python => Target::FormatPython,
                     })
                     .collect::<BTreeSet<_>>()
             }
@@ -141,6 +143,8 @@ pub(crate) trait ProgressReport {
 pub(crate) enum Target {
     FormatDiscoverFiles,
     FormatMarkdown,
+    FormatPython,
+    FormatRust,
     Format,
     Codegen,
     Ci,
@@ -153,12 +157,18 @@ pub(crate) struct TargetMetadata {
 
 pub(crate) trait TargetNode {
     fn metadata(&self) -> TargetMetadata;
-    fn dependencies(&self) -> BTreeSet<Target>;
+
+    fn dependencies(&self) -> BTreeSet<Target> {
+        BTreeSet::new()
+    }
+
     fn create_tasks(
         &self,
-        context: Arc<Mutex<TaskContext>>,
-        cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>>;
+        _context: Arc<Mutex<TaskContext>>,
+        _cancellation_token: CancellationToken,
+    ) -> Vec<Box<dyn Task>> {
+        vec![]
+    }
 }
 
 impl From<Target> for Box<dyn TargetNode> {
@@ -167,6 +177,8 @@ impl From<Target> for Box<dyn TargetNode> {
             Target::Format => Box::<FormatTarget>::default(),
             Target::FormatMarkdown => Box::<FormatMarkdownTarget>::default(),
             Target::FormatDiscoverFiles => Box::<FormatDiscoverFilesTarget>::default(),
+            Target::FormatPython => Box::<FormatPythonTarget>::default(),
+            Target::FormatRust => Box::<FormatRustTarget>::default(),
             Target::Codegen => Box::<CodegenTarget>::default(),
             Target::Ci => Box::<CiTarget>::default(),
         }
