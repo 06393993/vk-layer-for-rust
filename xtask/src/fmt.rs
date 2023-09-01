@@ -185,10 +185,7 @@ impl TargetNode for FormatDiscoverFilesTarget {
                 Ok(())
             }
 
-            fn execute(
-                &self,
-                progress_report: Box<dyn ProgressReport>,
-            ) -> Result<Self::OutputType> {
+            fn execute(&self, progress_report: &dyn ProgressReport) -> Result<Self::OutputType> {
                 self.cancellation_token.check_cancelled()?;
                 let file_type = TypesBuilder::new()
                     .add_defaults()

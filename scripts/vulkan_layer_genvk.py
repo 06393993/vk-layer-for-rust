@@ -54,8 +54,8 @@ def make_gen_opts(
             LayerTraitGenerator,
             GeneratorOptions(
                 conventions=conventions,
-                filename="layer_trait/generated.rs",
-                directory=directory,
+                filename="generated.rs",
+                directory=str(Path(directory) / "layer_trait"),
                 genpath=None,
                 apiname="vulkan",
                 profile=None,
@@ -71,8 +71,8 @@ def make_gen_opts(
             GlobalSimpleInterceptGenerator,
             GeneratorOptions(
                 conventions=conventions,
-                filename="global_simple_intercept/generated.rs",
-                directory=directory,
+                filename="generated.rs",
+                directory=str(Path(directory) / "global_simple_intercept"),
                 genpath=None,
                 apiname="vulkan",
                 profile=None,

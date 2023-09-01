@@ -192,8 +192,7 @@ jobs:
         uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f
         with:
           key: ${{ runner.os }}
-      - run: cargo xtask codegen
-      - run: git diff --exit-code
+      - run: cargo xtask codegen --check
   
   doctest:
     name: Rust doc test

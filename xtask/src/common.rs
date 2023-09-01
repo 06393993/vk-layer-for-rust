@@ -19,7 +19,7 @@ use std::{
     process::Stdio,
     rc::Rc,
     sync::{
-        atomic::AtomicBool,
+        atomic::{self, AtomicBool, AtomicU64},
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
@@ -45,7 +45,7 @@ use crate::{
         FormatConfig, FormatDiscoverFilesTarget, FormatFilesContext, FormatMarkdownTarget,
         FormatPythonTarget, FormatRustTarget, FormatTarget,
     },
-    CiCli, Commands, FmtFileType,
+    CiCli, CodegenCli, Commands, FmtFileType,
 };
 
 pub(crate) struct CancellationTokenSource(Arc<AtomicBool>);
@@ -91,21 +91,24 @@ pub(crate) struct TaskContext {
     pub format_config: Arc<FormatConfig>,
     pub format_files: Option<Arc<FormatFilesContext>>,
     pub ci_cli: Option<CiCli>,
+    pub codegen_cli: Option<CodegenCli>,
 }
 
 impl From<super::Cli> for TaskContext {
     fn from(cli: super::Cli) -> Self {
         let mut format_config = FormatConfig::default();
         let mut ci_cli = None;
+        let mut codegen_cli = None;
         match cli.command {
             Commands::Fmt(fmt_cli) => format_config.check = fmt_cli.check,
             Commands::Ci(input) => ci_cli = Some(input),
-            Commands::Codegen => {}
+            Commands::Codegen(input) => codegen_cli = Some(input),
         }
         Self {
             format_files: None,
             format_config: Arc::new(format_config),
             ci_cli,
+            codegen_cli,
         }
     }
 }
@@ -114,7 +117,7 @@ impl super::Cli {
     pub(crate) fn create_targets(&self) -> BTreeSet<Target> {
         match &self.command {
             super::Commands::Ci(_) => BTreeSet::from([Target::Ci]),
-            super::Commands::Codegen => BTreeSet::from([Target::Codegen]),
+            super::Commands::Codegen(_) => BTreeSet::from([Target::Codegen]),
             super::Commands::Fmt(fmt_cli) => {
                 let file_types = fmt_cli.file_type.iter().cloned().collect::<BTreeSet<_>>();
                 if file_types.is_empty() {
@@ -133,7 +136,7 @@ impl super::Cli {
     }
 }
 
-pub(crate) trait ProgressReport {
+pub(crate) trait ProgressReport: Sync {
     fn set_message(&self, message: String);
     fn increase(&self, delta: u64);
     fn finish(&self);
@@ -217,8 +220,21 @@ pub(crate) trait Task: Send {
     fn execute(
         &self,
         context: Arc<Mutex<TaskContext>>,
-        progress_report: Box<dyn ProgressReport>,
+        progress_report: &dyn ProgressReport,
     ) -> Result<()>;
+
+    fn and_then(
+        self,
+        and_then: impl Fn(&dyn ProgressReport) -> Result<()> + Send + 'static,
+    ) -> AndThenTask
+    where
+        Self: Sized + 'static,
+    {
+        AndThenTask {
+            task: Box::new(self),
+            and_then: Box::new(and_then),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -342,18 +358,22 @@ impl TaskScheduler for RayonTaskScheduler {
                                 } => s.spawn(move |_| {
                                     struct TaskSchedulerProgressReport {
                                         total: u64,
-                                        position: RefCell<u64>,
+                                        position: AtomicU64,
                                         task_id: TaskId,
-                                        task_message_tx: Sender<TaskSchedulerMessage>,
+                                        task_message_tx: Mutex<Sender<TaskSchedulerMessage>>,
                                     }
 
                                     impl ProgressReport for TaskSchedulerProgressReport {
                                         fn set_message(&self, message: String) {
                                             self.task_message_tx
+                                                .lock()
+                                                .unwrap()
                                                 .send(TaskSchedulerMessage::Progress {
                                                     task_id: self.task_id.clone(),
                                                     message: Some(message),
-                                                    position: *self.position.borrow(),
+                                                    position: self
+                                                        .position
+                                                        .load(atomic::Ordering::SeqCst),
                                                 })
                                                 .unwrap_or_else(|e| {
                                                     warn!(
@@ -365,12 +385,17 @@ impl TaskScheduler for RayonTaskScheduler {
                                         }
 
                                         fn increase(&self, delta: u64) {
-                                            *self.position.borrow_mut() += delta;
+                                            self.position
+                                                .fetch_add(delta, atomic::Ordering::SeqCst);
                                             self.task_message_tx
+                                                .lock()
+                                                .unwrap()
                                                 .send(TaskSchedulerMessage::Progress {
                                                     task_id: self.task_id.clone(),
                                                     message: None,
-                                                    position: *self.position.borrow(),
+                                                    position: self
+                                                        .position
+                                                        .load(atomic::Ordering::SeqCst),
                                                 })
                                                 .unwrap_or_else(|e| {
                                                     warn!(
@@ -382,12 +407,17 @@ impl TaskScheduler for RayonTaskScheduler {
                                         }
 
                                         fn finish(&self) {
-                                            *self.position.borrow_mut() = self.total;
+                                            self.position
+                                                .store(self.total, atomic::Ordering::SeqCst);
                                             self.task_message_tx
+                                                .lock()
+                                                .unwrap()
                                                 .send(TaskSchedulerMessage::Progress {
                                                     task_id: self.task_id.clone(),
                                                     message: None,
-                                                    position: *self.position.borrow(),
+                                                    position: self
+                                                        .position
+                                                        .load(atomic::Ordering::SeqCst),
                                                 })
                                                 .unwrap_or_else(|e| {
                                                     warn!(
@@ -401,9 +431,9 @@ impl TaskScheduler for RayonTaskScheduler {
 
                                     let progress_report = TaskSchedulerProgressReport {
                                         total: task.metadata().total_progress,
-                                        position: RefCell::new(0),
+                                        position: AtomicU64::new(0),
                                         task_id: task_id.clone(),
-                                        task_message_tx: task_message_tx.clone(),
+                                        task_message_tx: Mutex::new(task_message_tx.clone()),
                                     };
 
                                     task_message_tx
@@ -416,7 +446,7 @@ impl TaskScheduler for RayonTaskScheduler {
                                                 task_id
                                             )
                                         });
-                                    let result = task.execute(context, Box::new(progress_report));
+                                    let result = task.execute(context, &progress_report);
                                     task_message_tx
                                         .send(TaskSchedulerMessage::Complete { task_id, result })
                                         .unwrap_or_else(|e| {
@@ -481,7 +511,7 @@ pub(crate) trait TypedTask: Send {
         Default::default()
     }
 
-    fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<Self::OutputType>;
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<Self::OutputType>;
     fn merge_output(&self, context: &mut TaskContext, output: Self::OutputType) -> Result<()>;
 }
 
@@ -493,7 +523,7 @@ impl<T: TypedTask> Task for T {
     fn execute(
         &self,
         context: Arc<Mutex<TaskContext>>,
-        progress_report: Box<dyn ProgressReport>,
+        progress_report: &dyn ProgressReport,
     ) -> Result<()> {
         let task_metadata = self.metadata();
         let task_name = task_metadata.name.as_deref().unwrap_or("(anonymous)");
@@ -510,7 +540,7 @@ pub(crate) trait SimpleTypedTask: Send {
         Default::default()
     }
 
-    fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()>;
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()>;
 }
 
 impl<T: SimpleTypedTask> TypedTask for T {
@@ -520,7 +550,7 @@ impl<T: SimpleTypedTask> TypedTask for T {
         <Self as SimpleTypedTask>::metadata(self)
     }
 
-    fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
         <Self as SimpleTypedTask>::execute(self, progress_report)
     }
 
@@ -541,6 +571,7 @@ pub(crate) struct CmdsTask {
 impl CmdsTask {
     pub fn new(
         name: Option<String>,
+        // TODO: change to allow the cmds_builder to return a Result.
         cmds_builder: impl for<'a> Fn(&'a Shell) -> Vec<Cmd<'a>> + 'static + Send,
         cancellation_token: CancellationToken,
     ) -> Self {
@@ -563,7 +594,7 @@ impl SimpleTypedTask for CmdsTask {
         self.metadata.clone()
     }
 
-    fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
         self.cancellation_token.check_cancelled()?;
         for cmd in (self.cmds_builder)(&self.sh) {
             let cmd = cmd.quiet();
@@ -621,6 +652,28 @@ impl SimpleTypedTask for CmdsTask {
             progress_report.increase(1);
         }
         Ok(())
+    }
+}
+
+type AndThenFunction = Box<dyn Fn(&dyn ProgressReport) -> Result<()> + Send>;
+
+pub(crate) struct AndThenTask {
+    task: Box<dyn Task>,
+    and_then: AndThenFunction,
+}
+
+impl Task for AndThenTask {
+    fn metadata(&self) -> TaskMetadata {
+        self.task.metadata()
+    }
+
+    fn execute(
+        &self,
+        context: Arc<Mutex<TaskContext>>,
+        progress_report: &dyn ProgressReport,
+    ) -> Result<()> {
+        self.task.execute(context, progress_report)?;
+        (self.and_then)(progress_report)
     }
 }
 
@@ -879,7 +932,7 @@ impl TargetGraph {
                 target: &dyn TargetNode,
                 cancellation_token: CancellationToken,
             ) {
-                let target_metadata = Arc::new(target.metadata().clone());
+                let target_metadata = Arc::new(target.metadata());
                 let mut target_info = TargetInfo {
                     running_tasks: BTreeSet::new(),
                     metadata: Arc::clone(&target_metadata),

@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::{
-        CancellationToken, SimpleTypedTask, TargetMetadata, TargetNode, Task, TaskContext,
-        TaskMetadata,
+        CancellationToken, ProgressReport, SimpleTypedTask, TargetMetadata, TargetNode, Task,
+        TaskContext, TaskMetadata,
     },
     CiCli,
 };
@@ -92,7 +92,7 @@ struct CoverageBadgeTask {
 }
 
 impl SimpleTypedTask for CoverageBadgeTask {
-    fn execute(&self, progress_report: Box<dyn crate::common::ProgressReport>) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
         let cli = &self.ci_cli;
         self.cancellation_token.check_cancelled()?;
         ensure!(

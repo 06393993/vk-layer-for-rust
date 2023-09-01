@@ -51,7 +51,7 @@ enum Commands {
     Ci(CiCli),
 
     /// Regenerate source.
-    Codegen,
+    Codegen(CodegenCli),
 
     /// Format source code.
     Fmt(FmtCli),
@@ -87,6 +87,13 @@ struct FmtCli {
     #[arg(long, value_enum)]
     file_type: Vec<FmtFileType>,
 
+    /// Do not apply changes to files
+    #[arg(long)]
+    check: bool,
+}
+
+#[derive(Args)]
+struct CodegenCli {
     /// Do not apply changes to files
     #[arg(long)]
     check: bool,

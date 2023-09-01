@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
+use once_cell::sync::Lazy;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use std::{
     env,
     fs::File,
-    io::Write,
-    path::PathBuf,
+    io::{BufWriter, Read, Write},
+    path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
     time::SystemTime,
 };
-use xshell::cmd;
+use xshell::{cmd, Shell, TempDir};
 
 use bindgen::EnumVariation;
 
@@ -38,6 +40,84 @@ fn current_year() -> u64 {
         .unwrap();
     const SECONDS_PER_YEAR: u64 = 60 * 60 * 24 * 365;
     since_epoch.as_secs() / SECONDS_PER_YEAR + 1970
+}
+
+fn diff_files(
+    left_path: &Path,
+    right_path: &Path,
+    progress_report: &dyn ProgressReport,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    let mut contents = [left_path, right_path]
+        .par_iter()
+        .map(|file_path| -> Result<String> {
+            let mut file = File::open(file_path).context("open file")?;
+            cancellation_token.check_cancelled()?;
+            progress_report.set_message(format!("Reading contents from {}", file_path.display()));
+            let mut buffer = String::new();
+            file.read_to_string(&mut buffer)
+                .with_context(|| format!("read contents from {}", file_path.display()))?;
+            Ok(buffer)
+        })
+        .collect::<Vec<_>>();
+
+    let right = contents.pop().unwrap()?;
+    let left = contents.pop().unwrap()?;
+    let diff_lines = diff::lines(&left, &right);
+    let line_width: usize = diff_lines
+        .len()
+        .checked_ilog10()
+        .unwrap_or(0)
+        .try_into()
+        .unwrap();
+    let is_same = diff_lines
+        .iter()
+        .all(|diff| matches!(diff, diff::Result::Both(..)));
+    let mut error_message = BufWriter::new(Vec::<u8>::new());
+    let mut left_line_number = 0;
+    let mut right_line_number = 0;
+    writeln!(
+        error_message,
+        "{} and {} don't match",
+        left_path.display(),
+        right_path.display()
+    )
+    .context("write general error message")?;
+    writeln!(error_message).context("write blank line to the error message")?;
+    for diff in diff_lines {
+        match diff {
+            diff::Result::Left(left) => {
+                left_line_number += 1;
+                writeln!(
+                    error_message,
+                    "{:>line_width$} {:>line_width$} - {}",
+                    left_line_number, "", left
+                )
+                .context("write a missing line")?;
+            }
+            diff::Result::Right(right) => {
+                right_line_number += 1;
+                writeln!(
+                    error_message,
+                    "{:>line_width$} {:>line_width$} + {}",
+                    "", right_line_number, right
+                )
+                .context("write an extra line")?;
+            }
+            diff::Result::Both(..) => {
+                left_line_number += 1;
+                right_line_number += 1;
+            }
+        }
+    }
+    if !is_same {
+        let error_message = error_message
+            .into_inner()
+            .context("unwrap the buffered writer for the error message")?;
+        let error_message = String::from_utf8_lossy(&error_message).to_string();
+        return Err(Error::msg(error_message));
+    }
+    Ok(())
 }
 
 struct BindgenTask {
@@ -59,7 +139,7 @@ impl SimpleTypedTask for BindgenTask {
         }
     }
 
-    fn execute(&self, progress_report: Box<dyn ProgressReport>) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
         self.cancellation_token.check_cancelled()?;
         let mut out_file = File::create(&self.out_path).with_context(|| {
             format!(
@@ -107,12 +187,13 @@ pub(crate) struct CodegenTarget {
     genvk_targets: Vec<&'static str>,
     vk_xml_path: PathBuf,
     vulkan_layer_generated_dir: PathBuf,
+    rustfmt_config_file_path: PathBuf,
 }
 
 impl CodegenTarget {
     fn create_vk_layer_binding_tasks(
         &self,
-        _: Arc<Mutex<TaskContext>>,
+        context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
     ) -> Vec<Box<dyn Task>> {
         // TODO: move rustfmt detection to a separate software detection task
@@ -154,8 +235,10 @@ impl CodegenTarget {
             current_year()
         );
         let set_common_bindgen_configs = {
+            let rustfmt_config_file_path = self.rustfmt_config_file_path.clone();
             move |bindgen_builder: bindgen::Builder| -> bindgen::Builder {
                 bindgen_builder
+                    .rustfmt_configuration_file(Some(rustfmt_config_file_path.clone()))
                     .header(vk_layer_h_path.as_os_str().to_str().unwrap())
                     .clang_args(&[
                         "-I",
@@ -185,9 +268,30 @@ pub use unix::*;
 pub use windows::*;
 ",
         );
+        let temp_dir = Arc::new(Lazy::new(|| {
+            let sh = Shell::new().unwrap_or_else(|e| {
+                panic!("Failed to create shell for creating temp dir: {:?}", e)
+            });
+            sh.create_temp_dir()
+                .unwrap_or_else(|e| panic!("Failed to create temporary directory: {:?}", e))
+        }));
+        let check = context
+            .lock()
+            .unwrap()
+            .codegen_cli
+            .as_ref()
+            .map(|cli| cli.check)
+            .unwrap_or(false);
+        let general_out_path = if check {
+            let mut out_path = temp_dir.path().to_owned();
+            out_path.push("vk_layer_general.rs");
+            out_path
+        } else {
+            self.vk_layer_general_out.clone()
+        };
         let general_binding_task = BindgenTask {
             rustfmt_path: rustfmt_path.clone(),
-            out_path: self.vk_layer_general_out.clone(),
+            out_path: general_out_path.clone(),
             preamble,
             bindgen_builder_builder: Box::new({
                 let set_common_bindgen_configs = set_common_bindgen_configs.clone();
@@ -207,20 +311,67 @@ pub use windows::*;
             }),
             cancellation_token: cancellation_token.clone(),
         };
+        let general_binding_task = general_binding_task.and_then({
+            let cancellation_token = cancellation_token.clone();
+            let expected_path = general_out_path;
+            let actual_path = self.vk_layer_general_out.clone();
+            let temp_dir = temp_dir.clone();
+            move |progress_report| {
+                cancellation_token.check_cancelled()?;
+                if expected_path == actual_path {
+                    assert!(!check);
+                    return Ok(());
+                }
+                diff_files(
+                    &actual_path,
+                    &expected_path,
+                    progress_report,
+                    cancellation_token.clone(),
+                )
+                .with_context(|| format!("check {}", actual_path.display()))?;
+                // We must keep temp_dir alive so that the directory is still alive.
+                drop(temp_dir.clone());
+                Ok(())
+            }
+        });
+        let platform_specific_out_path = if check {
+            let mut out_path = temp_dir.path().to_owned();
+            out_path.push("platform.rs");
+            out_path
+        } else {
+            self.vk_layer_platform_specific_out.clone()
+        };
         let platform_specific_binding_task = BindgenTask {
             rustfmt_path,
-            out_path: self.vk_layer_platform_specific_out.clone(),
+            out_path: platform_specific_out_path.clone(),
             preamble: license_comments,
             bindgen_builder_builder: Box::new({
-                let set_common_bindgen_configs = set_common_bindgen_configs.clone();
+                let set_common_bindgen_configs = set_common_bindgen_configs;
                 move |builder: bindgen::Builder| -> bindgen::Builder {
                     set_common_bindgen_configs(builder)
                         .allowlist_type("VkLayerFunction_?")
                         .allowlist_type("VkNegotiateLayerStructType")
                 }
             }),
-            cancellation_token,
+            cancellation_token: cancellation_token.clone(),
         };
+        let platform_specific_binding_task = platform_specific_binding_task.and_then({
+            let expected_path = platform_specific_out_path;
+            let actual_path = self.vk_layer_platform_specific_out.clone();
+            move |progress_report| {
+                cancellation_token.check_cancelled()?;
+                diff_files(
+                    &actual_path,
+                    &expected_path,
+                    progress_report,
+                    cancellation_token.clone(),
+                )
+                .with_context(|| format!("check {}", actual_path.display()))?;
+                // We must keep temp_dir alive so that the directory is still alive.
+                drop(temp_dir.clone());
+                Ok(())
+            }
+        });
         vec![
             Box::new(general_binding_task),
             Box::new(platform_specific_binding_task),
@@ -229,25 +380,51 @@ pub use windows::*;
 
     fn create_vulkan_layer_genvk_tasks(
         &self,
-        _: Arc<Mutex<TaskContext>>,
+        context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
     ) -> Vec<Box<dyn Task>> {
+        let check = context
+            .lock()
+            .unwrap()
+            .codegen_cli
+            .as_ref()
+            .map(|cli| cli.check)
+            .unwrap_or(false);
+        let temp_dir = Arc::new(Mutex::<Option<TempDir>>::new(None));
         let mut tasks: Vec<Box<dyn Task>> = vec![];
         // TODO: move python detection to a separate target
         let python_command = guess_python_command().expect("Failed to find installed python.");
         for target in &self.genvk_targets {
             let task_name = target.to_string();
             let target = PathBuf::from(target);
-            let mut output_file_path = self.vulkan_layer_generated_dir.clone();
-            output_file_path.push(target.clone());
             let task = CmdsTask::new(
                 Some(task_name),
                 {
-                    let python_command = python_command.clone();
                     let vulkan_layer_genvk_path = self.vulkan_layer_genvk_path.clone();
                     let registry = self.vk_xml_path.clone();
-                    let out_dir = self.vulkan_layer_generated_dir.clone();
+                    let temp_dir = Arc::clone(&temp_dir);
+                    let vulkan_layer_generated_dir = self.vulkan_layer_generated_dir.clone();
+                    let target = target.clone();
+                    let rustfmt_config_file_path = self.rustfmt_config_file_path.clone();
                     move |shell| {
+                        let out_dir = if check {
+                            let mut temp_dir = temp_dir.lock().unwrap();
+                            match temp_dir.as_ref() {
+                                Some(temp_dir) => temp_dir.path().to_owned(),
+                                None => {
+                                    let dir = shell.create_temp_dir().unwrap_or_else(|e| {
+                                        panic!("Failed to create temporary out directory: {:?}", e)
+                                    });
+                                    let path = dir.path().to_owned();
+                                    *temp_dir = Some(dir);
+                                    path
+                                }
+                            }
+                        } else {
+                            vulkan_layer_generated_dir.clone()
+                        };
+                        let mut output_file_path = out_dir.clone();
+                        output_file_path.push(target.clone());
                         vec![
                             cmd!(shell, "{python_command} {vulkan_layer_genvk_path} {target}")
                                 .arg("-registry")
@@ -260,12 +437,43 @@ pub use windows::*;
                                 .arg("--skip-children")
                                 .arg("--edition")
                                 .arg("2021")
+                                .arg("--config-path")
+                                .arg(&rustfmt_config_file_path)
                                 .arg(&output_file_path),
                         ]
                     }
                 },
                 cancellation_token.clone(),
             );
+            let task = task.and_then({
+                let temp_dir = Arc::clone(&temp_dir);
+                let cancellation_token = cancellation_token.clone();
+                let actual_dir = self.vulkan_layer_generated_dir.clone();
+                move |progress_report| {
+                    cancellation_token.check_cancelled()?;
+                    let expected_dir = {
+                        let temp_dir = temp_dir.lock().unwrap();
+                        match temp_dir.as_ref() {
+                            Some(temp_dir) => {
+                                assert!(check, "Temporary directory not created for checking.");
+                                temp_dir.path().to_owned()
+                            }
+                            None => return Ok(()),
+                        }
+                    };
+                    let mut actual_file_path = actual_dir.clone();
+                    actual_file_path.push(target.clone());
+                    let mut expected_file_path = expected_dir;
+                    expected_file_path.push(target.clone());
+                    diff_files(
+                        &actual_file_path,
+                        &expected_file_path,
+                        progress_report,
+                        cancellation_token.clone(),
+                    )
+                    .with_context(|| format!("check {}", target.display()))
+                }
+            });
             tasks.push(Box::new(task));
         }
         tasks
@@ -299,6 +507,13 @@ impl Default for CodegenTarget {
         assert!(cargo_manifest_dir.is_absolute());
         let mut project_root_dir = cargo_manifest_dir;
         assert!(project_root_dir.pop());
+        let mut rustfmt_config_file_path = project_root_dir.clone();
+        rustfmt_config_file_path.push("rustfmt.toml");
+        assert!(
+            rustfmt_config_file_path.exists(),
+            "The rustfmt config file {} doesn't exist.",
+            rustfmt_config_file_path.display()
+        );
 
         let mut vulkan_headers_dir = project_root_dir.clone();
         vulkan_headers_dir.push("third_party");
@@ -341,6 +556,7 @@ impl Default for CodegenTarget {
             ],
             vk_xml_path,
             vulkan_layer_generated_dir,
+            rustfmt_config_file_path,
         }
     }
 }
