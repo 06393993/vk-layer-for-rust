@@ -251,7 +251,7 @@ fn main() -> Result<()> {
     ctrlc::set_handler({
         let cancellation_token_source = cancellation_token_source.clone();
         move || {
-            cancellation_token_source.cancel();
+            cancellation_token_source.cancel("Ctrl-C is pressed.");
         }
     })
     .context("set ctrlc handle")?;

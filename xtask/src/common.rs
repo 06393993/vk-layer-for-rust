@@ -15,11 +15,12 @@
 use std::{
     cell::RefCell,
     collections::{btree_map, BTreeMap, BTreeSet},
+    fmt::{Debug, Display},
     io::{BufWriter, Write},
     process::Stdio,
     rc::Rc,
     sync::{
-        atomic::{self, AtomicBool, AtomicU64},
+        atomic::{self, AtomicU64},
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
@@ -27,7 +28,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Context, Error, Result};
+use anyhow::{anyhow, Context, Error as AnyhowError, Result};
 use fixedbitset::FixedBitSet;
 use log::{debug, error, warn};
 use petgraph::{
@@ -35,6 +36,7 @@ use petgraph::{
     visit::{IntoNeighbors, IntoNodeIdentifiers, Reversed, VisitMap, Visitable},
     Direction::Incoming,
 };
+use thiserror::Error;
 use wait_timeout::ChildExt;
 use xshell::{Cmd, Shell};
 
@@ -48,41 +50,53 @@ use crate::{
     CiCli, CodegenCli, Commands, FmtFileType,
 };
 
-pub(crate) struct CancellationTokenSource(Arc<AtomicBool>);
+#[derive(Error, Debug)]
+pub(crate) enum TaskError {
+    #[error("the task is cancelled: `{0}`")]
+    Cancelled(AnyhowError),
+}
+
+pub(crate) type TaskResult<T> = Result<T, TaskError>;
+
+trait CancelMessage: Display + Debug + Send + Sync + 'static {}
+
+impl<T: Display + Debug + Send + Sync + 'static> CancelMessage for T {}
+
+pub(crate) struct CancellationTokenSource(Arc<Mutex<Option<Arc<dyn CancelMessage>>>>);
 
 impl CancellationTokenSource {
     pub fn token(&self) -> CancellationToken {
         CancellationToken(Arc::clone(&self.0))
     }
 
-    pub fn cancel(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    pub fn cancel<T>(&self, context: T)
+    where
+        T: Display + Debug + Send + Sync + 'static,
+    {
+        self.0.lock().unwrap().replace(Arc::new(context));
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::SeqCst)
+        self.0.lock().unwrap().is_some()
     }
 }
 
 impl Default for CancellationTokenSource {
     fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self(Arc::new(Mutex::new(None)))
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct CancellationToken(Arc<AtomicBool>);
+pub(crate) struct CancellationToken(Arc<Mutex<Option<Arc<dyn CancelMessage>>>>);
 
 impl CancellationToken {
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    pub fn check_cancelled(&self) -> Result<()> {
-        if self.is_cancelled() {
-            Err(anyhow!("Canceled"))
-        } else {
-            Ok(())
+    pub fn check_cancelled(&self) -> TaskResult<()> {
+        match self.0.lock().unwrap().as_ref() {
+            Some(message) => Err(TaskError::Cancelled(anyhow::Error::msg(Arc::clone(
+                message,
+            )))),
+            None => Ok(()),
         }
     }
 }
@@ -620,7 +634,7 @@ impl SimpleTypedTask for CmdsTask {
                     if let Err(e) = proc.kill() {
                         error!("Failed to kill process `{}': {}", command_name, e);
                     }
-                    return Err(e);
+                    return Err(e.into());
                 }
                 poll_interval = std::cmp::Ord::min(poll_interval * 2, Duration::from_millis(500));
             };
@@ -646,7 +660,7 @@ impl SimpleTypedTask for CmdsTask {
                     .into_inner()
                     .context("unwrap the buffered writer for the error message")?;
                 let message = String::from_utf8_lossy(&message).to_string();
-                return Err(Error::msg(message));
+                return Err(AnyhowError::msg(message));
             }
 
             progress_report.increase(1);
@@ -1010,9 +1024,19 @@ impl TargetGraph {
                 let cancellation_token_source = Arc::clone(&cancellation_token_source);
                 let failed = Rc::clone(&failed);
                 move |message| {
-                    if let TargetSchedulerMessage::TaskComplete { result: Err(_), .. } = &message {
+                    if let TargetSchedulerMessage::TaskComplete {
+                        target_metadata,
+                        task_metadata,
+                        result: Err(_),
+                        ..
+                    } = &message
+                    {
                         *failed.borrow_mut() = true;
-                        cancellation_token_source.cancel();
+                        let mut task_full_name = target_metadata.name.clone();
+                        if let Some(task_name) = task_metadata.name.as_ref() {
+                            task_full_name.push_str(task_name);
+                        }
+                        cancellation_token_source.cancel(format!("{} failed", task_full_name));
                     }
                     target_scheduler_handler(message);
                 }
