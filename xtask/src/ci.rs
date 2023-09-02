@@ -18,14 +18,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, Context};
 use log::error;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     common::{
         CancellationToken, ProgressReport, SimpleTypedTask, TargetMetadata, TargetNode, Task,
-        TaskContext, TaskMetadata,
+        TaskContext, TaskMetadata, TaskResult,
     },
     CiCli,
 };
@@ -92,14 +92,12 @@ struct CoverageBadgeTask {
 }
 
 impl SimpleTypedTask for CoverageBadgeTask {
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()> {
         let cli = &self.ci_cli;
         self.cancellation_token.check_cancelled()?;
-        ensure!(
-            cli.coverage_report.exists(),
-            "{} doesn't exist.",
-            cli.coverage_report.display()
-        );
+        if !cli.coverage_report.exists() {
+            Err(anyhow!("{} doesn't exist.", cli.coverage_report.display()))?;
+        }
         self.cancellation_token.check_cancelled()?;
         let file = File::open(&cli.coverage_report).with_context(|| {
             format!("open coverage report at {}", cli.coverage_report.display())
@@ -109,11 +107,12 @@ impl SimpleTypedTask for CoverageBadgeTask {
         let report: CoverageReport = serde_json::from_reader(reader)
             .with_context(|| format!("parse the report at {}", cli.coverage_report.display()))?;
         self.cancellation_token.check_cancelled()?;
-        ensure!(
-            !report.data.is_empty(),
-            "Unexpected data field length: {}",
-            report.data.len()
-        );
+        if report.data.is_empty() {
+            Err(anyhow!(
+                "Unexpected data field length: {}",
+                report.data.len()
+            ))?;
+        }
         let shield_badge = create_shield_badge(cli.label.clone(), &report.data[0].totals.lines);
         self.cancellation_token.check_cancelled()?;
         let mut out_file = File::create(&cli.output_path).with_context(|| {

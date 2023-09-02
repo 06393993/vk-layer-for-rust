@@ -30,7 +30,7 @@ use bindgen::EnumVariation;
 
 use crate::common::{
     CancellationToken, CmdsTask, ProgressReport, SimpleTypedTask, TargetMetadata, TargetNode, Task,
-    TaskContext, TaskMetadata,
+    TaskContext, TaskMetadata, TaskResult,
 };
 
 // May not be precise, but should be enough for generating copyright comments.
@@ -139,7 +139,7 @@ impl SimpleTypedTask for BindgenTask {
         }
     }
 
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()> {
         self.cancellation_token.check_cancelled()?;
         let mut out_file = File::create(&self.out_path).with_context(|| {
             format!(
@@ -471,7 +471,8 @@ pub use windows::*;
                         progress_report,
                         cancellation_token.clone(),
                     )
-                    .with_context(|| format!("check {}", target.display()))
+                    .with_context(|| format!("check {}", target.display()))?;
+                    Ok(())
                 }
             });
             tasks.push(Box::new(task));

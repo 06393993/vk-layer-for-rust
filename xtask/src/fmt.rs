@@ -19,14 +19,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use ignore::{types::TypesBuilder, WalkBuilder};
 use log::error;
 use xshell::cmd;
 
 use crate::common::{
     CancellationToken, CmdsTask, ProgressReport, Target, TargetMetadata, TargetNode, Task,
-    TaskContext, TypedTask,
+    TaskContext, TaskResult, TypedTask,
 };
 
 pub(crate) struct FormatFilesContext {
@@ -180,12 +180,15 @@ impl TargetNode for FormatDiscoverFilesTarget {
                 &self,
                 context: &mut TaskContext,
                 output: Self::OutputType,
-            ) -> Result<()> {
+            ) -> TaskResult<()> {
                 context.format_files = Some(Arc::new(output));
                 Ok(())
             }
 
-            fn execute(&self, progress_report: &dyn ProgressReport) -> Result<Self::OutputType> {
+            fn execute(
+                &self,
+                progress_report: &dyn ProgressReport,
+            ) -> TaskResult<Self::OutputType> {
                 self.cancellation_token.check_cancelled()?;
                 let file_type = TypesBuilder::new()
                     .add_defaults()

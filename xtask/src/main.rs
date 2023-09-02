@@ -27,7 +27,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use console::Term;
 use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
-use log::{error, info};
+use log::{error, info, warn};
 
 mod ci;
 mod codegen;
@@ -38,6 +38,8 @@ use common::{
     CancellationTokenSource, RayonTaskScheduler, TargetGraph, TargetId, TargetMetadata,
     TargetSchedulerMessage, TaskId, TaskMetadata,
 };
+
+use crate::common::TaskError;
 
 #[derive(Parser)]
 struct Cli {
@@ -213,8 +215,15 @@ fn main() -> Result<()> {
                             }
                             Err(e) => {
                                 let prefix = get_prefix(&target_metadata, &task_metadata);
-                                error!("{}: failed in {}.", prefix, HumanDuration(elapsed));
-                                errors.push(e.context(prefix));
+                                match e {
+                                    TaskError::Cancelled(e) => {
+                                        warn!("{} cancelled: {}", prefix, e);
+                                    }
+                                    TaskError::Failed(e) => {
+                                        error!("{}: failed in {}.", prefix, HumanDuration(elapsed));
+                                        errors.push(e.context(prefix));
+                                    }
+                                }
                             }
                         }
                     }
@@ -231,16 +240,25 @@ fn main() -> Result<()> {
                     TargetSchedulerMessage::TargetComplete {
                         target_id,
                         target_metadata,
+                        success,
                     } => {
                         let target_progress_bar = &target_progress_bars[&target_id];
                         let elapsed = target_progress_bar.elapsed();
                         target_progress_bar.finish_and_clear();
                         target_progress_bars.remove(&target_id);
-                        info!(
-                            "{} completes in {}.",
-                            target_metadata.name,
-                            HumanDuration(elapsed)
-                        )
+                        if success {
+                            info!(
+                                "{} completes in {}.",
+                                target_metadata.name,
+                                HumanDuration(elapsed)
+                            );
+                        } else {
+                            error!(
+                                "{} failed in {}.",
+                                target_metadata.name,
+                                HumanDuration(elapsed)
+                            );
+                        }
                     }
                 }
             }
@@ -251,7 +269,7 @@ fn main() -> Result<()> {
     ctrlc::set_handler({
         let cancellation_token_source = cancellation_token_source.clone();
         move || {
-            cancellation_token_source.cancel("Ctrl-C is pressed.");
+            cancellation_token_source.cancel(Arc::new("Ctrl-C is pressed."));
         }
     })
     .context("set ctrlc handle")?;

@@ -51,9 +51,15 @@ use crate::{
 };
 
 #[derive(Error, Debug)]
+#[error(transparent)]
+pub(crate) struct CancelError(Arc<AnyhowError>);
+
+#[derive(Error, Debug)]
 pub(crate) enum TaskError {
     #[error("the task is cancelled: `{0}`")]
-    Cancelled(AnyhowError),
+    Cancelled(#[from] CancelError),
+    #[error("the task fails: `{0}`")]
+    Failed(#[from] AnyhowError),
 }
 
 pub(crate) type TaskResult<T> = Result<T, TaskError>;
@@ -69,11 +75,11 @@ impl CancellationTokenSource {
         CancellationToken(Arc::clone(&self.0))
     }
 
-    pub fn cancel<T>(&self, context: T)
+    pub fn cancel<T>(&self, context: Arc<T>)
     where
         T: Display + Debug + Send + Sync + 'static,
     {
-        self.0.lock().unwrap().replace(Arc::new(context));
+        self.0.lock().unwrap().replace(context);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -91,11 +97,11 @@ impl Default for CancellationTokenSource {
 pub(crate) struct CancellationToken(Arc<Mutex<Option<Arc<dyn CancelMessage>>>>);
 
 impl CancellationToken {
-    pub fn check_cancelled(&self) -> TaskResult<()> {
+    pub fn check_cancelled(&self) -> Result<(), CancelError> {
         match self.0.lock().unwrap().as_ref() {
-            Some(message) => Err(TaskError::Cancelled(anyhow::Error::msg(Arc::clone(
+            Some(message) => Err(CancelError(Arc::new(anyhow::Error::msg(Arc::clone(
                 message,
-            )))),
+            ))))),
             None => Ok(()),
         }
     }
@@ -235,11 +241,11 @@ pub(crate) trait Task: Send {
         &self,
         context: Arc<Mutex<TaskContext>>,
         progress_report: &dyn ProgressReport,
-    ) -> Result<()>;
+    ) -> TaskResult<()>;
 
     fn and_then(
         self,
-        and_then: impl Fn(&dyn ProgressReport) -> Result<()> + Send + 'static,
+        and_then: impl Fn(&dyn ProgressReport) -> TaskResult<()> + Send + 'static,
     ) -> AndThenTask
     where
         Self: Sized + 'static,
@@ -266,6 +272,7 @@ pub(crate) enum TargetSchedulerMessage {
         target_metadata: Arc<TargetMetadata>,
     },
     TargetComplete {
+        success: bool,
         target_id: TargetId,
         target_metadata: Arc<TargetMetadata>,
     },
@@ -299,7 +306,7 @@ pub(crate) enum TargetSchedulerMessage {
         target_metadata: Arc<TargetMetadata>,
         task_id: TaskId,
         task_metadata: Arc<TaskMetadata>,
-        result: Result<()>,
+        result: TaskResult<()>,
     },
 }
 
@@ -315,7 +322,7 @@ pub(crate) enum TaskSchedulerMessage {
     },
     Complete {
         task_id: TaskId,
-        result: Result<()>,
+        result: TaskResult<()>,
     },
 }
 
@@ -525,8 +532,8 @@ pub(crate) trait TypedTask: Send {
         Default::default()
     }
 
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<Self::OutputType>;
-    fn merge_output(&self, context: &mut TaskContext, output: Self::OutputType) -> Result<()>;
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<Self::OutputType>;
+    fn merge_output(&self, context: &mut TaskContext, output: Self::OutputType) -> TaskResult<()>;
 }
 
 impl<T: TypedTask> Task for T {
@@ -538,13 +545,28 @@ impl<T: TypedTask> Task for T {
         &self,
         context: Arc<Mutex<TaskContext>>,
         progress_report: &dyn ProgressReport,
-    ) -> Result<()> {
+    ) -> TaskResult<()> {
         let task_metadata = self.metadata();
         let task_name = task_metadata.name.as_deref().unwrap_or("(anonymous)");
-        let output = <Self as TypedTask>::execute(self, progress_report)
-            .with_context(|| format!("executing task: {}", task_name))?;
-        self.merge_output(&mut context.lock().unwrap(), output)
-            .with_context(|| format!("merge the output for task: {}", task_name))?;
+        let output = match <Self as TypedTask>::execute(self, progress_report) {
+            Ok(output) => output,
+            Err(e @ TaskError::Cancelled(_)) => return Err(e),
+            Err(TaskError::Failed(e)) => {
+                return Err(TaskError::Failed(
+                    e.context(format!("execute task: {}", task_name)),
+                ));
+            }
+        };
+        if let Err(e) = self.merge_output(&mut context.lock().unwrap(), output) {
+            match e {
+                e @ TaskError::Cancelled(_) => return Err(e),
+                TaskError::Failed(e) => {
+                    return Err(TaskError::Failed(
+                        e.context(format!("merge the output for task: {}", task_name)),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -554,7 +576,7 @@ pub(crate) trait SimpleTypedTask: Send {
         Default::default()
     }
 
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()>;
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()>;
 }
 
 impl<T: SimpleTypedTask> TypedTask for T {
@@ -564,11 +586,11 @@ impl<T: SimpleTypedTask> TypedTask for T {
         <Self as SimpleTypedTask>::metadata(self)
     }
 
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()> {
         <Self as SimpleTypedTask>::execute(self, progress_report)
     }
 
-    fn merge_output(&self, _: &mut TaskContext, _: Self::OutputType) -> Result<()> {
+    fn merge_output(&self, _: &mut TaskContext, _: Self::OutputType) -> TaskResult<()> {
         Ok(())
     }
 }
@@ -608,7 +630,7 @@ impl SimpleTypedTask for CmdsTask {
         self.metadata.clone()
     }
 
-    fn execute(&self, progress_report: &dyn ProgressReport) -> Result<()> {
+    fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()> {
         self.cancellation_token.check_cancelled()?;
         for cmd in (self.cmds_builder)(&self.sh) {
             let cmd = cmd.quiet();
@@ -660,7 +682,7 @@ impl SimpleTypedTask for CmdsTask {
                     .into_inner()
                     .context("unwrap the buffered writer for the error message")?;
                 let message = String::from_utf8_lossy(&message).to_string();
-                return Err(AnyhowError::msg(message));
+                return Err(TaskError::Failed(AnyhowError::msg(message)));
             }
 
             progress_report.increase(1);
@@ -669,7 +691,7 @@ impl SimpleTypedTask for CmdsTask {
     }
 }
 
-type AndThenFunction = Box<dyn Fn(&dyn ProgressReport) -> Result<()> + Send>;
+type AndThenFunction = Box<dyn Fn(&dyn ProgressReport) -> TaskResult<()> + Send>;
 
 pub(crate) struct AndThenTask {
     task: Box<dyn Task>,
@@ -685,7 +707,7 @@ impl Task for AndThenTask {
         &self,
         context: Arc<Mutex<TaskContext>>,
         progress_report: &dyn ProgressReport,
-    ) -> Result<()> {
+    ) -> TaskResult<()> {
         self.task.execute(context, progress_report)?;
         (self.and_then)(progress_report)
     }
@@ -802,6 +824,7 @@ impl TargetGraph {
         struct TargetInfo {
             metadata: Arc<TargetMetadata>,
             running_tasks: BTreeSet<TaskId>,
+            failed: bool,
         }
 
         struct TargetScheduler<T: TaskScheduler> {
@@ -919,6 +942,9 @@ impl TargetGraph {
                                 target_id
                             )
                         });
+                        if result.is_err() {
+                            target.failed = true;
+                        }
                         let target_metadata = Arc::clone(&target.metadata);
                         (self.target_scheduler_handler)(TargetSchedulerMessage::TaskComplete {
                             target_id: target_id.into(),
@@ -931,6 +957,7 @@ impl TargetGraph {
                         if target.running_tasks.is_empty() {
                             (self.target_scheduler_handler)(
                                 TargetSchedulerMessage::TargetComplete {
+                                    success: !target.failed,
                                     target_id: target_id.into(),
                                     target_metadata,
                                 },
@@ -950,6 +977,7 @@ impl TargetGraph {
                 let mut target_info = TargetInfo {
                     running_tasks: BTreeSet::new(),
                     metadata: Arc::clone(&target_metadata),
+                    failed: false,
                 };
                 (self.target_scheduler_handler)(TargetSchedulerMessage::TargetScheduled {
                     target_id: target_idx.into(),
@@ -959,6 +987,7 @@ impl TargetGraph {
                 self.schedule_tasks(target_idx, &mut target_info, tasks);
                 if target_info.running_tasks.is_empty() {
                     (self.target_scheduler_handler)(TargetSchedulerMessage::TargetComplete {
+                        success: true,
                         target_id: target_idx.into(),
                         target_metadata,
                     })
@@ -1027,16 +1056,25 @@ impl TargetGraph {
                     if let TargetSchedulerMessage::TaskComplete {
                         target_metadata,
                         task_metadata,
-                        result: Err(_),
+                        result: Err(e),
                         ..
                     } = &message
                     {
                         *failed.borrow_mut() = true;
-                        let mut task_full_name = target_metadata.name.clone();
-                        if let Some(task_name) = task_metadata.name.as_ref() {
-                            task_full_name.push_str(task_name);
+                        match e {
+                            TaskError::Failed(e) => {
+                                let mut task_full_name = target_metadata.name.clone();
+                                if let Some(task_name) = task_metadata.name.as_ref() {
+                                    task_full_name.push_str(" ");
+                                    task_full_name.push_str(task_name);
+                                }
+                                cancellation_token_source
+                                    .cancel(Arc::new(format!("{} failed: {}", task_full_name, e)));
+                            }
+                            TaskError::Cancelled(CancelError(e)) => {
+                                cancellation_token_source.cancel(Arc::clone(e));
+                            }
                         }
-                        cancellation_token_source.cancel(format!("{} failed", task_full_name));
                     }
                     target_scheduler_handler(message);
                 }
