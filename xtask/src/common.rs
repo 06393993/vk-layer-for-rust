@@ -17,7 +17,8 @@ use std::{
     collections::{btree_map, BTreeMap, BTreeSet},
     fmt::{Debug, Display},
     io::{BufWriter, Write},
-    process::Stdio,
+    path::PathBuf,
+    process::{self, Stdio},
     rc::Rc,
     sync::{
         atomic::{self, AtomicU64},
@@ -43,6 +44,7 @@ use xshell::{Cmd, Shell};
 use crate::{
     ci::CiTarget,
     codegen::CodegenTarget,
+    dependency::{CmdBuilder, DependencyContext, DependencyError, DependencyTarget},
     fmt::{
         FormatConfig, FormatDiscoverFilesTarget, FormatFilesContext, FormatMarkdownTarget,
         FormatPythonTarget, FormatRustTarget, FormatTarget,
@@ -112,6 +114,7 @@ pub(crate) struct TaskContext {
     pub format_files: Option<Arc<FormatFilesContext>>,
     pub ci_cli: Option<CiCli>,
     pub codegen_cli: Option<CodegenCli>,
+    pub dependencies: DependencyContext,
 }
 
 impl From<super::Cli> for TaskContext {
@@ -129,7 +132,33 @@ impl From<super::Cli> for TaskContext {
             format_config: Arc::new(format_config),
             ci_cli,
             codegen_cli,
+            dependencies: Default::default(),
         }
+    }
+}
+
+pub(crate) trait TaskContextExt {
+    fn rustfmt_path(&self) -> Result<PathBuf, DependencyError>;
+    fn cargo_fmt_cmd_builder(&self) -> Result<CmdBuilder, DependencyError>;
+}
+
+impl TaskContextExt for Arc<Mutex<TaskContext>> {
+    fn rustfmt_path(&self) -> Result<PathBuf, DependencyError> {
+        self.lock()
+            .unwrap()
+            .dependencies
+            .rustfmt
+            .clone()
+            .expect("rustfmt is not checked")
+    }
+
+    fn cargo_fmt_cmd_builder(&self) -> Result<CmdBuilder, DependencyError> {
+        self.lock()
+            .unwrap()
+            .dependencies
+            .cargo_fmt_cmd
+            .clone()
+            .expect("rustfmt is not checked")
     }
 }
 
@@ -164,6 +193,7 @@ pub(crate) trait ProgressReport: Sync {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Target {
+    Dependency,
     FormatDiscoverFiles,
     FormatMarkdown,
     FormatPython,
@@ -189,14 +219,15 @@ pub(crate) trait TargetNode {
         &self,
         _context: Arc<Mutex<TaskContext>>,
         _cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
-        vec![]
+    ) -> Result<Vec<Box<dyn Task>>> {
+        Ok(vec![])
     }
 }
 
 impl From<Target> for Box<dyn TargetNode> {
     fn from(value: Target) -> Self {
         match value {
+            Target::Dependency => Box::<DependencyTarget>::default(),
             Target::Format => Box::<FormatTarget>::default(),
             Target::FormatMarkdown => Box::<FormatMarkdownTarget>::default(),
             Target::FormatDiscoverFiles => Box::<FormatDiscoverFilesTarget>::default(),
@@ -272,7 +303,7 @@ pub(crate) enum TargetSchedulerMessage {
         target_metadata: Arc<TargetMetadata>,
     },
     TargetComplete {
-        success: bool,
+        result: Result<()>,
         target_id: TargetId,
         target_metadata: Arc<TargetMetadata>,
     },
@@ -595,6 +626,65 @@ impl<T: SimpleTypedTask> TypedTask for T {
     }
 }
 
+pub(crate) fn run_cmd(
+    cmd: Cmd,
+    progress_report: &dyn ProgressReport,
+    cancellation_token: CancellationToken,
+) -> TaskResult<process::Output> {
+    let cmd = cmd.quiet();
+    progress_report.set_message(format!("{}", cmd));
+    cancellation_token.check_cancelled()?;
+    let command_name = cmd.to_string();
+    let mut command: std::process::Command = cmd.into();
+    let mut proc = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawn child process: {}", command_name))?;
+    let mut poll_interval = Duration::from_micros(1);
+    let status = loop {
+        let wait_result = proc
+            .wait_timeout(poll_interval)
+            .with_context(|| format!("wait for child process: {}", command_name))?;
+        if let Some(status) = wait_result {
+            break status;
+        }
+        if let Err(e) = cancellation_token.check_cancelled() {
+            if let Err(e) = proc.kill() {
+                error!("Failed to kill process `{}': {}", command_name, e);
+            }
+            return Err(e.into());
+        }
+        poll_interval = std::cmp::Ord::min(poll_interval * 2, Duration::from_millis(500));
+    };
+    let output = proc
+        .wait_with_output()
+        .with_context(|| format!("wait with output for child: `{}'", command_name))?;
+    if !status.success() {
+        let mut message = BufWriter::new(Vec::<u8>::new());
+        writeln!(
+            message,
+            "command exited with non-zero code `{}`: {}",
+            command_name, status
+        )
+        .context("write general error message")?;
+        writeln!(message).context("write a blank new line to the error message")?;
+        writeln!(message, "stdout:").context("write stdout tag to error message")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        writeln!(message, "{}", stdout).context("write stdout to error message")?;
+        writeln!(message, "stderr:").context("write stderr tag to error message")?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        writeln!(message, "{}", stderr).context("write stderr to error message")?;
+        let message = message
+            .into_inner()
+            .context("unwrap the buffered writer for the error message")?;
+        let message = String::from_utf8_lossy(&message).to_string();
+        return Err(TaskError::Failed(AnyhowError::msg(message)));
+    }
+    Ok(output)
+}
+
 type CmdsBuilder = Box<dyn for<'a> Fn(&'a Shell) -> Vec<Cmd<'a>> + 'static + Send>;
 
 pub(crate) struct CmdsTask {
@@ -633,58 +723,7 @@ impl SimpleTypedTask for CmdsTask {
     fn execute(&self, progress_report: &dyn ProgressReport) -> TaskResult<()> {
         self.cancellation_token.check_cancelled()?;
         for cmd in (self.cmds_builder)(&self.sh) {
-            let cmd = cmd.quiet();
-            progress_report.set_message(format!("{}", cmd));
-            self.cancellation_token.check_cancelled()?;
-            let command_name = cmd.to_string();
-            let mut command: std::process::Command = cmd.into();
-            let mut proc = command
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .with_context(|| format!("spawn child process: {}", command_name))?;
-            let mut poll_interval = Duration::from_micros(1);
-            let status = loop {
-                let wait_result = proc
-                    .wait_timeout(poll_interval)
-                    .with_context(|| format!("wait for child process: {}", command_name))?;
-                if let Some(status) = wait_result {
-                    break status;
-                }
-                if let Err(e) = self.cancellation_token.check_cancelled() {
-                    if let Err(e) = proc.kill() {
-                        error!("Failed to kill process `{}': {}", command_name, e);
-                    }
-                    return Err(e.into());
-                }
-                poll_interval = std::cmp::Ord::min(poll_interval * 2, Duration::from_millis(500));
-            };
-            if !status.success() {
-                let output = proc
-                    .wait_with_output()
-                    .with_context(|| format!("wait with output for child: `{}'", command_name))?;
-                let mut message = BufWriter::new(Vec::<u8>::new());
-                writeln!(
-                    message,
-                    "command exited with non-zero code `{}`: {}",
-                    command_name, status
-                )
-                .context("write general error message")?;
-                writeln!(message).context("write a blank new line to the error message")?;
-                writeln!(message, "stdout:").context("write stdout tag to error message")?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                writeln!(message, "{}", stdout).context("write stdout to error message")?;
-                writeln!(message, "stderr:").context("write stderr tag to error message")?;
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                writeln!(message, "{}", stderr).context("write stderr to error message")?;
-                let message = message
-                    .into_inner()
-                    .context("unwrap the buffered writer for the error message")?;
-                let message = String::from_utf8_lossy(&message).to_string();
-                return Err(TaskError::Failed(AnyhowError::msg(message)));
-            }
-
+            run_cmd(cmd, progress_report, self.cancellation_token.clone())?;
             progress_report.increase(1);
         }
         Ok(())
@@ -824,7 +863,7 @@ impl TargetGraph {
         struct TargetInfo {
             metadata: Arc<TargetMetadata>,
             running_tasks: BTreeSet<TaskId>,
-            failed: bool,
+            result: Result<()>,
         }
 
         struct TargetScheduler<T: TaskScheduler> {
@@ -942,8 +981,8 @@ impl TargetGraph {
                                 target_id
                             )
                         });
-                        if result.is_err() {
-                            target.failed = true;
+                        if let Err(e) = &result {
+                            target.result = Err(anyhow!("Task failed: {}", e));
                         }
                         let target_metadata = Arc::clone(&target.metadata);
                         (self.target_scheduler_handler)(TargetSchedulerMessage::TaskComplete {
@@ -957,7 +996,7 @@ impl TargetGraph {
                         if target.running_tasks.is_empty() {
                             (self.target_scheduler_handler)(
                                 TargetSchedulerMessage::TargetComplete {
-                                    success: !target.failed,
+                                    result: Ok(()),
                                     target_id: target_id.into(),
                                     target_metadata,
                                 },
@@ -977,17 +1016,28 @@ impl TargetGraph {
                 let mut target_info = TargetInfo {
                     running_tasks: BTreeSet::new(),
                     metadata: Arc::clone(&target_metadata),
-                    failed: false,
+                    result: Ok(()),
                 };
                 (self.target_scheduler_handler)(TargetSchedulerMessage::TargetScheduled {
                     target_id: target_idx.into(),
                     target_metadata: Arc::clone(&target_metadata),
                 });
-                let tasks = target.create_tasks(Arc::clone(&self.context), cancellation_token);
+                let tasks = match target.create_tasks(Arc::clone(&self.context), cancellation_token)
+                {
+                    Ok(tasks) => tasks,
+                    Err(e) => {
+                        (self.target_scheduler_handler)(TargetSchedulerMessage::TargetComplete {
+                            result: Err(e),
+                            target_id: target_idx.into(),
+                            target_metadata: Arc::clone(&target_metadata),
+                        });
+                        return;
+                    }
+                };
                 self.schedule_tasks(target_idx, &mut target_info, tasks);
                 if target_info.running_tasks.is_empty() {
                     (self.target_scheduler_handler)(TargetSchedulerMessage::TargetComplete {
-                        success: true,
+                        result: Ok(()),
                         target_id: target_idx.into(),
                         target_metadata,
                     })
@@ -1053,28 +1103,33 @@ impl TargetGraph {
                 let cancellation_token_source = Arc::clone(&cancellation_token_source);
                 let failed = Rc::clone(&failed);
                 move |message| {
-                    if let TargetSchedulerMessage::TaskComplete {
-                        target_metadata,
-                        task_metadata,
-                        result: Err(e),
-                        ..
-                    } = &message
-                    {
-                        *failed.borrow_mut() = true;
-                        match e {
+                    let error = match &message {
+                        TargetSchedulerMessage::TaskComplete {
+                            target_metadata,
+                            task_metadata,
+                            result: Err(e),
+                            ..
+                        } => match e {
                             TaskError::Failed(e) => {
                                 let mut task_full_name = target_metadata.name.clone();
                                 if let Some(task_name) = task_metadata.name.as_ref() {
-                                    task_full_name.push_str(" ");
+                                    task_full_name.push(' ');
                                     task_full_name.push_str(task_name);
                                 }
-                                cancellation_token_source
-                                    .cancel(Arc::new(format!("{} failed: {}", task_full_name, e)));
+                                Some(Arc::new(anyhow!("{} failed: {}", task_full_name, e)))
                             }
-                            TaskError::Cancelled(CancelError(e)) => {
-                                cancellation_token_source.cancel(Arc::clone(e));
-                            }
-                        }
+                            TaskError::Cancelled(CancelError(e)) => Some(Arc::clone(e)),
+                        },
+                        TargetSchedulerMessage::TargetComplete {
+                            result: Err(e),
+                            target_metadata,
+                            ..
+                        } => Some(Arc::new(anyhow!("{} failed: {}", target_metadata.name, e))),
+                        _ => None,
+                    };
+                    if let Some(error) = error {
+                        *failed.borrow_mut() = true;
+                        cancellation_token_source.cancel(error);
                     }
                     target_scheduler_handler(message);
                 }

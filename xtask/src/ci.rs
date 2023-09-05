@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
@@ -150,16 +150,16 @@ impl TargetNode for CiTarget {
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         let ci_cli = context
             .lock()
             .unwrap()
             .ci_cli
             .take()
             .expect("missing CI CLI");
-        vec![Box::new(CoverageBadgeTask {
+        Ok(vec![Box::new(CoverageBadgeTask {
             cancellation_token,
             ci_cli,
-        })]
+        })])
     }
 }

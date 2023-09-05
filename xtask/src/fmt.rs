@@ -19,14 +19,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use ignore::{types::TypesBuilder, WalkBuilder};
 use log::error;
 use xshell::cmd;
 
 use crate::common::{
     CancellationToken, CmdsTask, ProgressReport, Target, TargetMetadata, TargetNode, Task,
-    TaskContext, TaskResult, TypedTask,
+    TaskContext, TaskContextExt, TaskResult, TypedTask,
 };
 
 pub(crate) struct FormatFilesContext {
@@ -115,14 +115,14 @@ impl TargetNode for FormatMarkdownTarget {
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         let format_config = Arc::clone(&context.lock().unwrap().format_config);
         let format_files = context.lock().unwrap().format_files.clone();
         let format_files = format_files.expect(
             "Format file contexts are missing. Please check if all dependencies are properly \
              specified.",
         );
-        format_files
+        let tasks = format_files
             .markdown_files
             .iter()
             .map(|file| -> Box<dyn Task> {
@@ -150,7 +150,8 @@ impl TargetNode for FormatMarkdownTarget {
                 );
                 Box::new(task)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        Ok(tasks)
     }
 }
 
@@ -168,7 +169,7 @@ impl TargetNode for FormatDiscoverFilesTarget {
         &self,
         _: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         struct FormatDiscoverFilesTask {
             cancellation_token: CancellationToken,
         }
@@ -244,7 +245,9 @@ impl TargetNode for FormatDiscoverFilesTarget {
             }
         }
 
-        vec![Box::new(FormatDiscoverFilesTask { cancellation_token })]
+        Ok(vec![Box::new(FormatDiscoverFilesTask {
+            cancellation_token,
+        })])
     }
 }
 
@@ -258,24 +261,30 @@ impl TargetNode for FormatRustTarget {
         }
     }
 
+    fn dependencies(&self) -> BTreeSet<Target> {
+        BTreeSet::from([Target::Dependency])
+    }
+
     fn create_tasks(
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
+        let cargo_fmt_cmd_builder = context
+            .cargo_fmt_cmd_builder()
+            .context("check nightly cargo fmt")?;
         let format_config = Arc::clone(&context.lock().unwrap().format_config);
-        vec![Box::new(CmdsTask::new(
+        Ok(vec![Box::new(CmdsTask::new(
             None,
             move |sh| {
-                // TODO: check if nightly cargo and rustfmt are installed
-                let mut cmd = cmd!(sh, "rustup run nightly cargo fmt");
+                let mut cmd = cargo_fmt_cmd_builder(sh);
                 if format_config.check {
                     cmd = cmd.arg("--check");
                 }
                 vec![cmd]
             },
             cancellation_token,
-        ))]
+        ))])
     }
 }
 
@@ -297,14 +306,14 @@ impl TargetNode for FormatPythonTarget {
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         let format_config = Arc::clone(&context.lock().unwrap().format_config);
         let format_files = context.lock().unwrap().format_files.clone();
         let format_files = format_files.expect(
             "Format file contexts are missing. Please check if all dependencies are properly \
              specified.",
         );
-        format_files
+        let tasks = format_files
             .python_files
             .iter()
             .map(|file| -> Box<dyn Task> {
@@ -337,6 +346,7 @@ impl TargetNode for FormatPythonTarget {
                 );
                 Box::new(task)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        Ok(tasks)
     }
 }

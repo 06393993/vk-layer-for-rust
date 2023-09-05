@@ -32,6 +32,7 @@ use log::{error, info, warn};
 mod ci;
 mod codegen;
 mod common;
+mod dependency;
 mod fmt;
 
 use common::{
@@ -110,6 +111,7 @@ fn main() -> Result<()> {
     LogWrapper::new(multi_progress.clone(), logger)
         .try_init()
         .context("initialize logger")?;
+    log_panics::init();
 
     let cli = Cli::parse();
     let targets = cli.create_targets();
@@ -240,24 +242,24 @@ fn main() -> Result<()> {
                     TargetSchedulerMessage::TargetComplete {
                         target_id,
                         target_metadata,
-                        success,
+                        result,
                     } => {
                         let target_progress_bar = &target_progress_bars[&target_id];
                         let elapsed = target_progress_bar.elapsed();
                         target_progress_bar.finish_and_clear();
                         target_progress_bars.remove(&target_id);
-                        if success {
-                            info!(
+                        match result {
+                            Ok(()) => info!(
                                 "{} completes in {}.",
                                 target_metadata.name,
                                 HumanDuration(elapsed)
-                            );
-                        } else {
-                            error!(
-                                "{} failed in {}.",
+                            ),
+                            Err(e) => error!(
+                                "{} failed in {}: {:?}",
                                 target_metadata.name,
-                                HumanDuration(elapsed)
-                            );
+                                HumanDuration(elapsed),
+                                e
+                            ),
                         }
                     }
                 }

@@ -16,6 +16,7 @@ use anyhow::{Context, Error, Result};
 use once_cell::sync::Lazy;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use std::{
+    collections::BTreeSet,
     env,
     fs::File,
     io::{BufWriter, Read, Write},
@@ -29,8 +30,8 @@ use xshell::{cmd, Shell, TempDir};
 use bindgen::EnumVariation;
 
 use crate::common::{
-    CancellationToken, CmdsTask, ProgressReport, SimpleTypedTask, TargetMetadata, TargetNode, Task,
-    TaskContext, TaskMetadata, TaskResult,
+    CancellationToken, CmdsTask, ProgressReport, SimpleTypedTask, Target, TargetMetadata,
+    TargetNode, Task, TaskContext, TaskContextExt, TaskMetadata, TaskResult,
 };
 
 // May not be precise, but should be enough for generating copyright comments.
@@ -195,22 +196,8 @@ impl CodegenTarget {
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
-        // TODO: move rustfmt detection to a separate software detection task
-        let rustfmt_path = {
-            let output = Command::new("rustup")
-                .args(["which", "rustfmt", "--toolchain", "nightly"])
-                .output()
-                .expect("Could not spawn `rustup` command");
-            assert!(
-                output.status.success(),
-                "Unsuccessful status code when running `rustup`: {:?}",
-                output
-            );
-            String::from_utf8(output.stdout).expect("The `rustfmt` path is not valid `utf-8`")
-        };
-        let rustfmt_path = rustfmt_path.trim_end();
-        let rustfmt_path = PathBuf::from(rustfmt_path);
+    ) -> Result<Vec<Box<dyn Task>>> {
+        let rustfmt_path = context.rustfmt_path().context("check rustfmt")?;
 
         let mut vulkan_headers_include_dir = self.vulkan_headers_dir.clone();
         vulkan_headers_include_dir.push("include");
@@ -372,17 +359,17 @@ pub use windows::*;
                 Ok(())
             }
         });
-        vec![
+        Ok(vec![
             Box::new(general_binding_task),
             Box::new(platform_specific_binding_task),
-        ]
+        ])
     }
 
     fn create_vulkan_layer_genvk_tasks(
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         let check = context
             .lock()
             .unwrap()
@@ -406,6 +393,7 @@ pub use windows::*;
                     let vulkan_layer_generated_dir = self.vulkan_layer_generated_dir.clone();
                     let target = target.clone();
                     let rustfmt_config_file_path = self.rustfmt_config_file_path.clone();
+                    let rustfmt_path = context.rustfmt_path().context("check rustfmt")?;
                     move |shell| {
                         let out_dir = if check {
                             let mut temp_dir = temp_dir.lock().unwrap();
@@ -431,8 +419,7 @@ pub use windows::*;
                                 .arg(&registry)
                                 .arg("-o")
                                 .arg(&out_dir),
-                            // TODO: check if rustup and rustfmt nightly exist on the system
-                            cmd!(shell, "rustup run nightly rustfmt")
+                            cmd!(shell, "{rustfmt_path}")
                                 .arg("--unstable-features")
                                 .arg("--skip-children")
                                 .arg("--edition")
@@ -477,7 +464,7 @@ pub use windows::*;
             });
             tasks.push(Box::new(task));
         }
-        tasks
+        Ok(tasks)
     }
 }
 
@@ -488,17 +475,25 @@ impl TargetNode for CodegenTarget {
         }
     }
 
+    fn dependencies(&self) -> BTreeSet<Target> {
+        BTreeSet::from([Target::Dependency])
+    }
+
     fn create_tasks(
         &self,
         context: Arc<Mutex<TaskContext>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<Box<dyn Task>> {
+    ) -> Result<Vec<Box<dyn Task>>> {
         let mut tasks = vec![];
         tasks.extend(
-            self.create_vk_layer_binding_tasks(Arc::clone(&context), cancellation_token.clone()),
+            self.create_vk_layer_binding_tasks(Arc::clone(&context), cancellation_token.clone())
+                .context("create vk_layer.h bindgen tasks")?,
         );
-        tasks.extend(self.create_vulkan_layer_genvk_tasks(context, cancellation_token));
-        tasks
+        tasks.extend(
+            self.create_vulkan_layer_genvk_tasks(context, cancellation_token)
+                .context("generate from the vulkan_layer_genvk.py script")?,
+        );
+        Ok(tasks)
     }
 }
 
