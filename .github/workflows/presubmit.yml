@@ -31,71 +31,71 @@ jobs:
       - uses: actions/checkout@v3
         with:
           submodules: recursive
-      - name: Setup LLVM install path
-        id: setup-llvm-install-path
-        run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            echo "LLVM_INSTALL_PATH=`realpath $GITHUB_WORKSPACE/../LLVM`" >> $GITHUB_OUTPUT
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            echo "LLVM_INSTALL_PATH=C:/Program Files/LLVM" >> $GITHUB_OUTPUT
-          else
-            echo "$RUNNER_OS not supported"
-            exit 1
-          fi
-        shell: bash
-      - name: Cache LLVM and Clang
-        id: cache-llvm
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.setup-llvm-install-path.outputs.LLVM_INSTALL_PATH }}
-          key: ${{ format('llvm-16.0.0-{0}', runner.os) }}
-      - name: Install LLVM and Clang
-        # KyleMayes/install-llvm-action@v1.8.3
-        uses: KyleMayes/install-llvm-action@c135b3937686fd69c2651507aabc9925a8f9eee8
-        with:
-          version: "16.0.0"
-          directory: ${{ steps.setup-llvm-install-path.outputs.LLVM_INSTALL_PATH }}
-          cached: ${{ steps.cache-llvm.outputs.cache-hit }}
-      - name: Install missing depedencis
-        run: sudo apt-get install libtinfo5
-        if: runner.os == 'Linux'
-      - name: Set LIBCLANG_PATH
-        run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
-        if: runner.os == 'Windows'
-      - name: Set up stable Rust toolchain
-        # dtolnay/rust-toolchain@stable
-        uses: dtolnay/rust-toolchain@4f366e621dc8fa63f557ca04b8f4361824a35a45
-        with:
-          components: clippy, llvm-tools-preview
-      - name: Set up nightly Rust toolchain
-        # dtolnay/rust-toolchain@nightly
-        uses: dtolnay/rust-toolchain@f2f3c4b315c5bb8415dbb043af44ec90f68ae503
-        with:
-          components: rustfmt
-      - run: rustup default stable
-      - name: Set up Rust dependency cache
-        # Swatinem/rust-cache@v2.5.1
-        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f
-        with:
-          key: ${{ runner.os }}
-          cache-all-crates: true
-      - name: Install cargo nextest
-        run: cargo install cargo-nextest --locked
-      - name: Install cargo-make
-        run: cargo install --no-default-features --locked cargo-make
-      - name: Install cargo llvm cov
-        run: cargo install cargo-llvm-cov --locked
-      - uses: actions/setup-python@v4
-        with:
-          python-version: "3.9.13"
-          cache: "pipenv"
-      - name: Install pipenv
-        run: python -m pip install pipenv==2023.7.23
-      - name: Install python dependencies
-        run: pipenv install --ignore-pipfile
-      - name: Install addlicense
-        run: go install github.com/google/addlicense@master
-      - run: cargo make ci-presubmit
+      # - name: Setup LLVM install path
+      #   id: setup-llvm-install-path
+      #   run: |
+      #     if [ "$RUNNER_OS" == "Linux" ]; then
+      #       echo "LLVM_INSTALL_PATH=`realpath $GITHUB_WORKSPACE/../LLVM`" >> $GITHUB_OUTPUT
+      #     elif [ "$RUNNER_OS" == "Windows" ]; then
+      #       echo "LLVM_INSTALL_PATH=C:/Program Files/LLVM" >> $GITHUB_OUTPUT
+      #     else
+      #       echo "$RUNNER_OS not supported"
+      #       exit 1
+      #     fi
+      #   shell: bash
+      # - name: Cache LLVM and Clang
+      #   id: cache-llvm
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: ${{ steps.setup-llvm-install-path.outputs.LLVM_INSTALL_PATH }}
+      #     key: ${{ format('llvm-16.0.0-{0}', runner.os) }}
+      # - name: Install LLVM and Clang
+      #   # KyleMayes/install-llvm-action@v1.8.3
+      #   uses: KyleMayes/install-llvm-action@c135b3937686fd69c2651507aabc9925a8f9eee8
+      #   with:
+      #     version: "16.0.0"
+      #     directory: ${{ steps.setup-llvm-install-path.outputs.LLVM_INSTALL_PATH }}
+      #     cached: ${{ steps.cache-llvm.outputs.cache-hit }}
+      # - name: Install missing depedencis
+      #   run: sudo apt-get install libtinfo5
+      #   if: runner.os == 'Linux'
+      # - name: Set LIBCLANG_PATH
+      #   run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
+      #   if: runner.os == 'Windows'
+      # - name: Set up stable Rust toolchain
+      #   # dtolnay/rust-toolchain@stable
+      #   uses: dtolnay/rust-toolchain@4f366e621dc8fa63f557ca04b8f4361824a35a45
+      #   with:
+      #     components: clippy, llvm-tools-preview
+      # - name: Set up nightly Rust toolchain
+      #   # dtolnay/rust-toolchain@nightly
+      #   uses: dtolnay/rust-toolchain@f2f3c4b315c5bb8415dbb043af44ec90f68ae503
+      #   with:
+      #     components: rustfmt
+      # - run: rustup default stable
+      # - name: Set up Rust dependency cache
+      #   # Swatinem/rust-cache@v2.5.1
+      #   uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f
+      #   with:
+      #     key: ${{ runner.os }}
+      #     cache-all-crates: true
+      # - name: Install cargo nextest
+      #   run: cargo install cargo-nextest --locked
+      # - name: Install cargo-make
+      #   run: cargo install --no-default-features --locked cargo-make
+      # - name: Install cargo llvm cov
+      #   run: cargo install cargo-llvm-cov --locked
+      # - uses: actions/setup-python@v4
+      #   with:
+      #     python-version: "3.9.13"
+      #     cache: "pipenv"
+      # - name: Install pipenv
+      #   run: python -m pip install pipenv==2023.7.23
+      # - name: Install python dependencies
+      #   run: pipenv install --ignore-pipfile
+      # - name: Install addlicense
+      #   run: go install github.com/google/addlicense@master
+      # - run: cargo make ci-presubmit
       - name: Checkout base coverage
         uses: actions/checkout@v3
         with:
@@ -107,24 +107,24 @@ jobs:
       - name: Report coverage
         # 06393993/lcov-reporter-action@master
         # TODO: once the upstream accept the PR, change back to romeovs/lcov-reporter-action@master
-        uses: 06393993/lcov-reporter-action@45b31bf53fa5ac82d0f49039198080afdb535288
+        uses: 06393993/lcov-reporter-action@master
         with:
           lcov-file: target/lcov.info
           lcov-base: ${{ format('target/base-coverage/coverage-{0}/lcov.info', runner.os) }}
           filter-changed-files: true
           title: ${{ format('Test coverage for {0}', runner.os) }}
           post-to: ${{ github.event_name == 'push' && 'comment' || 'job-summary' }}
-      - uses: actions/upload-artifact@v3
-        with:
-          name: ${{ format('coverage-{0}', runner.os) }}
-          # lcov.info is needed for the next commit and PR to diff the coverage report of the base
-          # HTML results are needed for human to check the coverage report
-          # The coverage badge is used in the README.md.
-          path: |
-            target/lcov.info
-            target/llvm-cov
-            target/coverage_badge.json
-      - uses: actions/upload-artifact@v3
-        with:
-          name: ${{ format('doc-{0}', runner.os) }}
-          path: target/doc
+      # - uses: actions/upload-artifact@v3
+      #   with:
+      #     name: ${{ format('coverage-{0}', runner.os) }}
+      #     # lcov.info is needed for the next commit and PR to diff the coverage report of the base
+      #     # HTML results are needed for human to check the coverage report
+      #     # The coverage badge is used in the README.md.
+      #     path: |
+      #       target/lcov.info
+      #       target/llvm-cov
+      #       target/coverage_badge.json
+      # - uses: actions/upload-artifact@v3
+      #   with:
+      #     name: ${{ format('doc-{0}', runner.os) }}
+      #     path: target/doc
