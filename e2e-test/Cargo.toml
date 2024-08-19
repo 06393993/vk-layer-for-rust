@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[profile.default]
-default-filter = "!package(e2e-test)"
-retries = 0
-test-threads = "num-cpus"
+[package]
+edition = "2021"
+name = "e2e-test"
+version = "0.1.0"
 
-[profile.ci]
-fail-fast = false
-failure-output = "immediate-final"
+[dependencies]
 
-[profile.default-miri]
-test-threads = "num-cpus"
+[dev-dependencies]
+assert_cmd = "*"
+cfg-if = "*"
+escargot = "*"
+predicates = "*"

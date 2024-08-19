@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[profile.default]
-default-filter = "!package(e2e-test)"
-retries = 0
-test-threads = "num-cpus"
+$ErrorActionPreference = 'stop'
 
-[profile.ci]
-fail-fast = false
-failure-output = "immediate-final"
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$LlvmInstallPath
+)
 
-[profile.default-miri]
-test-threads = "num-cpus"
+$credentials = New-Object System.Management.Automation.PSCredential -ArgumentList @("testuser", (ConvertTo-SecureString -String "i23456@B" -AsPlainText -Force))
+$proc = Start-Process -FilePath cargo.exe -ArgumentList "make", "ci-e2e-test", "--llvm-path", "$LlvmInstallPath" -NoNewWindow -PassThru -Credential $credentials
+$proc.WaitForExit()
+exit $proc.ExitCode

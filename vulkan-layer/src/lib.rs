@@ -361,15 +361,15 @@
 //! For Windows,
 //! ```json
 //! {
-//!     "file_format_version" : "1.2.1",
+//!     "file_format_version": "1.2.1",
 //!     "layer": {
 //!         "name": "VK_LAYER_VENDOR_rust_example",
 //!         "type": "INSTANCE",
 //!         "library_path": ".\\VkLayer_vendor_rust_example.dll",
-//!         "library_arch" : "64",
-//!         "api_version" : "1.1.0",
-//!         "implementation_version" : "0",
-//!         "description" : "Rust test layer"
+//!         "library_arch": "64",
+//!         "api_version": "1.1.0",
+//!         "implementation_version": "0",
+//!         "description": "Rust test layer"
 //!     }
 //! }
 //! ```
@@ -377,15 +377,15 @@
 //! For Linux,
 //! ```json
 //! {
-//!     "file_format_version" : "1.2.1",
+//!     "file_format_version": "1.2.1",
 //!     "layer": {
 //!         "name": "VK_LAYER_VENDOR_rust_example",
 //!         "type": "INSTANCE",
 //!         "library_path": "./libVkLayer_vendor_rust_example.so",
-//!         "library_arch" : "64",
-//!         "api_version" : "1.1.0",
-//!         "implementation_version" : "0",
-//!         "description" : "Rust test layer"
+//!         "library_arch": "64",
+//!         "api_version": "1.1.0",
+//!         "implementation_version": "0",
+//!         "description": "Rust test layer"
 //!     }
 //! }
 //! ```
@@ -440,21 +440,21 @@ pub mod test_utils;
 
 #[cfg(feature = "unstable")]
 pub mod unstable_api;
-#[cfg(not(feature = "unstable"))]
-mod unstable_api;
 mod vk_utils;
 
 use bindings::vk_layer::{VkLayerDeviceCreateInfo, VkLayerFunction, VkLayerInstanceCreateInfo};
 pub use bindings::vk_layer::{VkLayerDeviceLink, VkLayerInstanceLink};
 pub use global_simple_intercept::Extension;
-use global_simple_intercept::{DeviceDispatchTable, InstanceDispatchTable, VulkanCommand};
+use global_simple_intercept::{
+    ApiVersion, DeviceDispatchTable, InstanceDispatchTable, VulkanCommand,
+};
 pub use layer_trait::{
     DeviceHooks, DeviceInfo, ExtensionProperties, GlobalHooks, GlobalHooksInfo, InstanceHooks,
     InstanceInfo, Layer, LayerManifest, LayerResult, VulkanCommand as LayerVulkanCommand,
 };
-use unstable_api::{ApiVersion, IsCommandEnabled, LazyCollection};
+use lazy_collection::LazyCollection;
 pub use vk_utils::{fill_vk_out_array, VulkanBaseInStructChain, VulkanBaseOutStructChain};
-use vk_utils::{ptr_as_uninit_mut, slice_from_raw_parts, slice_to_owned_strings};
+use vk_utils::{ptr_as_uninit_mut, slice_from_raw_parts, slice_to_owned_strings, IsCommandEnabled};
 pub use vulkan_layer_macros::{
     auto_deviceinfo_impl, auto_globalhooksinfo_impl, auto_instanceinfo_impl,
     declare_introspection_queries,

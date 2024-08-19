@@ -13,7 +13,7 @@
 # limitations under the License.
 
 [workspace]
-members = ["vulkan-layer", "vulkan-layer-macros", "examples/hello-world", "scripts"]
+members = ["vulkan-layer", "vulkan-layer-macros", "examples/hello-world", "scripts", "e2e-test"]
 resolver = "2"
 # Do not operate on vulkan-layer-macros by default, because it doesn't work well with panic=abort
 # for testing.

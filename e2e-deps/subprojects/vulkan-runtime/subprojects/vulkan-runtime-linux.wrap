@@ -1,0 +1,7 @@
+[wrap-file]
+directory = vulkan-runtime-linux
+source_url = https://sdk.lunarg.com/sdk/download/1.3.290.0/linux/vulkansdk-linux-x86_64-1.3.290.0.tar.xz
+source_filename = vulkansdk-linux-x86_64-1.3.290.0.tar.xz
+source_hash = 440906a95e7d42da0eaf5c3ae41471baf4aa7086df9d9b93795b0f908239a76a
+patch_directory = vulkan-runtime
+lead_directory_missing = yes

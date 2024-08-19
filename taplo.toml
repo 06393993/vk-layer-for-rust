@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-exclude = ["target/**", "third_party/**"]
+exclude = ["target/**", "third_party/**", "e2e-deps/subprojects/mesa-*/**", "e2e-deps/build/**"]
 include = ["**/*.toml"]
 
 [formatting]

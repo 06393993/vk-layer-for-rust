@@ -1,0 +1,6 @@
+[wrap-file]
+directory = VulkanRT-1.3.290.0-Components
+source_url = https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanRT-1.3.290.0-Components.zip
+source_filename = VulkanRT-1.3.290.0-Components.zip
+source_hash = e5766bad1123b32c9722104e8a873ee36528ee89d0a7269a7453f7a59d69ea85
+patch_directory = vulkan-runtime

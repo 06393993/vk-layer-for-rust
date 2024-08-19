@@ -23,14 +23,29 @@ description = "Set up environements."
 private = true
 script = '''
 
+set_env MY_CARGO_MAKE_DOC_ARGS ${CARGO_MAKE_TASK_ARGS}
+
 # Check whether linters and formatters should only check or fix in place.
 echo Parsing arguments...
 args = split ${CARGO_MAKE_TASK_ARGS} ;
-args = set_from_array ${args}
 
 # Handle the arguments
-has_check_arg = set_contains ${args} --check
+has_check_arg = array_contains ${args} --check
+has_check_arg = not equals ${has_check_arg} false
 echo Check if --check is passed to the argument: ${has_check_arg}
+
+llvm_path_index = array_contains ${args} --llvm-path
+if not equals ${llvm_path_index} false
+    llvm_path_index = calc ${llvm_path_index} + 1
+    llvm_path = array_get ${args} ${llvm_path_index}
+    if is_empty ${llvm_path}
+        echo The value for the --llvm-path argument is not specified
+        exit 1
+    end
+    echo The value for the --llvm-path argument: ${llvm_path}
+    set_env MY_CARGO_MAKE_E2E_DEPS_LLVM_PATH_ARG -Dllvm:llvm-path=${llvm_path}
+end
+
 cargo_make_task = get_env CARGO_MAKE_TASK
 is_ci_target = starts_with ${cargo_make_task} ci-
 echo Check if the ${cargo_make_task} target is a CI target: ${is_ci_target}
@@ -48,13 +63,25 @@ else
 end
 
 # For some targets, only passthrough the arguments if it's the toplevel target.
-is_test_toplevel_target = eq ${cargo_make_task} test
+test_targets = set_new test e2e-test
+is_test_toplevel_target = set_contains ${test_targets} ${cargo_make_task}
 if ${is_test_toplevel_target}
     set_env MY_CARGO_MAKE_NEXTEST_USER_ARGS ${CARGO_MAKE_TASK_ARGS}
 end
 is_typos_toplevel_target = eq ${cargo_make_task} typos
 if ${is_typos_toplevel_target}
     set_env MY_CARGO_MAKE_TYPOS_USER_ARGS ${CARGO_MAKE_TASK_ARGS}
+end
+
+# Set up envs specific to e2e tests
+e2e_deps_src_dir = join_path ${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY} e2e-deps
+set_env MY_CARGO_MAKE_E2E_DEPS_SRC_DIR ${e2e_deps_src_dir}
+e2e_deps_build_dir = join_path ${e2e_deps_src_dir} build
+set_env MY_CARGO_MAKE_E2E_DEPS_BUILD_DIR ${e2e_deps_build_dir}
+e2e_deps_install_prefix = join_path ${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY} target e2e-deps
+set_env MY_CARGO_MAKE_E2E_DEPS_INSTALL_PREFIX ${e2e_deps_install_prefix}
+if is_windows
+    set_env MY_CARGO_MAKE_E2E_DEPS_VSENV_ARG "--vsenv"
 end
 
 # Set up envs specific to CI
@@ -69,6 +96,44 @@ if ${is_ci_target}
     end
     rust_flags = concat ${rust_flags} "-D warnings"
     set_env RUSTFLAGS ${rust_flags}
+
+    # Shadow arguments for certain targets.
+    set_env MY_CARGO_MAKE_DOC_ARGS ""
+
+    # Set environments used by e2e tests. We set the environment variables for all CI targets, so
+    # that cargo always sees the same environements for all CI targets, and won't recompile.
+
+    vk_driver_files = array ${e2e_deps_install_prefix} share vulkan icd.d lvp_icd.x86_64.json
+    path_component_sep = set /
+    if is_windows
+        path_component_sep = set \\
+    end
+    vk_driver_files = array_join ${vk_driver_files} ${path_component_sep}
+    set_env VK_DRIVER_FILES ${vk_driver_files}
+    set_env VK_LOADER_LAYERS_DISABLE *MESA*,~implicit~
+    set_env VK_LOADER_DEBUG all
+    path = get_env PATH
+    e2e_deps_bin_dir = join_path ${e2e_deps_install_prefix} bin
+    path_sep = set :
+    if is_windows
+        path_sep = set ;
+    end
+    path = concat ${e2e_deps_bin_dir} ${path_sep} ${path}
+    set_env PATH ${path}
+
+    vulkaninfo_path = which vulkaninfo
+    echo Using vulkaninfo: ${vulkaninfo_path}
+
+    # Set up the path to search the dynamic libraries including the Vulkan loader on Linux.
+    if not is_windows
+        e2e_deps_lib_dir = join_path ${e2e_deps_install_prefix} lib
+        ld_library_path = get_env LD_LIBRARY_PATH
+        if not is_empty ${ld_library_path}
+            ld_library_path = concat : ${ld_library_path}
+        end
+        ld_library_path = concat ${e2e_deps_lib_dir} ${ld_library_path}
+        set_env LD_LIBRARY_PATH ${ld_library_path}
+    end
 end
 '''
 script_runner = "@duckscript"
@@ -287,6 +352,7 @@ description = "Format YAML files."
 category = "Format/Lint"
 dependencies = ["license", "toml-fmt"]
 description = "Lint all source files."
+# TODO: !!! add powershell linter and format
 run_task.name = ["rust-lint", "build-scripts", "python-lint", "mdformat", "yamlfmt"]
 
 [tasks.nextest-detection]
@@ -329,7 +395,15 @@ description = "Runs Rust doc test."
 install_crate = false
 
 [tasks.doc]
-args = ["+nightly", "doc", "--workspace", "--all-features", "--no-deps", "${@}"]
+args = [
+    "+nightly",
+    "doc",
+    "--workspace",
+    "--all-features",
+    "--no-deps",
+    "@@split(MY_CARGO_MAKE_DOC_ARGS,;)",
+]
+
 category = "Development"
 command = "cargo"
 description = "Generates Rust doc."
@@ -437,6 +511,8 @@ run_task.name = ["ci-coverage-badge", "ci-coverage-lcov-info", "ci-coverage-html
 [tasks.buildtest]
 category = "Development"
 description = "Build the project and tests. Pass --check to avoid linter to modify files."
+# cargo-make with fork = true will change some important environments compared with fork = false,
+# and can trigger a re-compile, so we always use fork = true when compiling.
 run_task = { name = ["typos", "lint", "test", "doctest"], fork = true }
 
 [tasks.ci-buildtest]
@@ -448,5 +524,62 @@ run_task.name = ["buildtest"]
 category = "CI"
 description = "Runs the CI presubmit check."
 run_task.fork = true
+# e2e test is a separate step, as we may need to run it under a separate not elevated user.
 run_task.name = ["ci-buildtest", "ci-coverage", "codegen", "doc"]
 run_task.parallel = true
+
+[tasks.e2e-test]
+args = [
+    "nextest",
+    "run",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--ignore-default-filter",
+    "-E",
+    "package(e2e-test)",
+    "@@split(MY_CARGO_MAKE_NEXTEST_PROFILE_ARGS,;)",
+    "@@split(MY_CARGO_MAKE_NEXTEST_USER_ARGS,;)",
+]
+category = "Development"
+command = "cargo"
+description = "Runs the e2e test."
+
+[tasks.ci-e2e-test]
+category = "CI"
+dependencies = ["ci-build-and-install-e2e-deps"]
+description = "Run the e2e tests with the CI configuration."
+run_task.fork = true
+run_task.name = ["e2e-test"]
+
+
+[tasks.config-e2e-deps]
+args = [
+    "run",
+    "meson",
+    "setup",
+    "@@remove-empty(MY_CARGO_MAKE_E2E_DEPS_VSENV_ARG)",
+    "${MY_CARGO_MAKE_E2E_DEPS_BUILD_DIR}",
+    "${MY_CARGO_MAKE_E2E_DEPS_SRC_DIR}",
+    "-Dprefix=${MY_CARGO_MAKE_E2E_DEPS_INSTALL_PREFIX}",
+    "@@remove-empty(MY_CARGO_MAKE_E2E_DEPS_LLVM_PATH_ARG)",
+    "--backend=ninja",
+    "--reconfigure",
+]
+command = "pipenv"
+private = true
+
+[tasks.compile-e2e-deps]
+args = ["run", "meson", "compile", "-C", "${MY_CARGO_MAKE_E2E_DEPS_BUILD_DIR}"]
+command = "pipenv"
+private = true
+
+[tasks.install-e2e-deps]
+args = ["run", "meson", "install", "-C", "${MY_CARGO_MAKE_E2E_DEPS_BUILD_DIR}"]
+command = "pipenv"
+private = true
+
+[tasks.ci-build-and-install-e2e-deps]
+category = "CI"
+description = "Build and install e2e dependencies."
+run_task = [{ name = ["config-e2e-deps", "compile-e2e-deps", "install-e2e-deps"] }]

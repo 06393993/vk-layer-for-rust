@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[profile.default]
-default-filter = "!package(e2e-test)"
-retries = 0
-test-threads = "num-cpus"
+project('vulkan-runtime', ['cpp'])
 
-[profile.ci]
-fail-fast = false
-failure-output = "immediate-final"
-
-[profile.default-miri]
-test-threads = "num-cpus"
+if target_machine.system() == 'windows'
+    subproject('vulkan-runtime-windows')
+elif target_machine.system() == 'linux'
+    subproject('vulkan-runtime-linux')
+else
+    error('Unsupported target system: ' + target_machine.system())
+endif
