@@ -29,8 +29,12 @@ else
         llvm_downloaded = subproject('llvm-downloaded-windows')
         llvm_c_dylib = llvm_downloaded.get_variable('llvm_c_dylib')
     elif target_machine.system() == 'linux'
+
+        # The extra empty new lines are to WA https://github.com/mesonbuild/meson/issues/13508
+        # TODO: remove the extra new lines once the fix is released
         # To run this project, it is required to install LLVM. Unlike on the Windows, meson should
         # usually be able to find the LLVM installation.
+
         error('Unimplemented')
     else
         error('Unsupported target system: ' + target_machine.system())
@@ -241,12 +245,12 @@ _lib_names = [
     'LTO',
     'Remarks',
 ]
-foreach d : _lib_names 
-  _deps += cpp.find_library(d, dirs : _search)
+foreach d : _lib_names
+    _deps += cpp.find_library(d, dirs: _search)
 endforeach
 
 if target_machine.system() == 'windows'
-  install_data(llvm_c_dylib, install_dir: 'bin')
+    install_data(llvm_c_dylib, install_dir: 'bin')
 endif
 
 _link_args = []
@@ -254,10 +258,10 @@ if target_machine.system() == 'linux'
     _link_args = ['-ltinfo']
 endif
 dep_llvm = declare_dependency(
-  include_directories : _inc,
-  link_args : _link_args,
-  dependencies : _deps,
-  version : '18.1.8',
+    include_directories: _inc,
+    link_args: _link_args,
+    dependencies: _deps,
+    version: '18.1.8',
 )
 
 has_rtti = false

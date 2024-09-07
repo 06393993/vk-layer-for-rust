@@ -13,18 +13,16 @@
 // limitations under the License.
 
 use std::{
+    env,
     ffi::OsString,
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, ensure, Context};
+use anyhow::{ensure, Context};
 use clap::{Error as ClapError, Parser};
-use glob::Pattern;
-use ignore::gitignore::Gitignore;
-use log::error;
+use log::{debug, error};
 use std::borrow::Borrow;
 use std::io;
-use walkdir::WalkDir;
 
 const ABOUT: &str = "List files and forward the canonical path as the arguments. If the command \
                      failed, the exit code will be non-zero. If a file can't be accessed, the \
@@ -34,18 +32,14 @@ const ABOUT: &str = "List files and forward the canonical path as the arguments.
 #[command(about = ABOUT)]
 pub struct Cli {
     /// Globs to include in search. Paths that match any of include patterns will be included. If
-    /// no include pattern is provided, "*" is used.
+    /// no include pattern is provided, all files will be included.
     #[arg(long)]
     pub include: Vec<String>,
 
-    /// Globs to exclude from search. Paths that match any of exclude patterns will not be
-    /// included.
-    #[arg(long)]
-    pub ignore: Vec<String>,
-
-    /// Respect the .gitignore file. Will find the .gitignore file under the root directory.
-    #[arg(long)]
-    pub use_gitignore: bool,
+    /// Matching is done relative to this directory path provided. .gitignore is also found from
+    /// this directory.
+    #[arg(long, default_value_os_t = Cli::default_match_base())]
+    pub match_base: OsString,
 
     /// Search root.
     pub root: OsString,
@@ -56,63 +50,52 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub fn get_paths(&self) -> anyhow::Result<impl IntoIterator<Item = PathBuf>> {
-        fn parse_pattern(pattern: &String) -> anyhow::Result<Pattern> {
-            Pattern::new(pattern).map_err(|e| anyhow!("Failed to parse pattern {}: {}", pattern, e))
-        }
-        let include_patterns = self
-            .include
-            .iter()
-            .map(parse_pattern)
-            .collect::<anyhow::Result<Vec<_>>>()
-            .context("parse include patterns")?;
-        let ignore_patterns = {
-            let mut ignore_patterns = self
-                .ignore
-                .iter()
-                .map(parse_pattern)
-                .collect::<anyhow::Result<Vec<_>>>()
-                .context("parse ignore patterns")?;
-            if self.use_gitignore {
-                ignore_patterns
-                    .push(Pattern::new("**/.git").expect("parsing .git pattern should succeed"));
-            }
-            ignore_patterns
-        };
+    fn default_match_base() -> OsString {
+        let mut path = PathBuf::from(
+            env::var("CARGO_MANIFEST_DIR")
+                .expect("CARGO_MANIFEST_DIR should always be set if run with cargo"),
+        );
+        path.pop();
+        path.into()
+    }
 
-        let gitignore = if self.use_gitignore {
-            let mut gitignore_path = PathBuf::from(&self.root);
-            gitignore_path.push(".gitignore");
-            let (gitignore, error) = Gitignore::new(&gitignore_path);
-            if let Some(error) = error {
-                error!(
-                    "Failed to create a new gitignore matcher from {}: {}",
-                    gitignore_path.display(),
-                    error
-                );
-                None
-            } else {
-                Some(gitignore)
-            }
-        } else {
-            None
-        };
-        let walk_dir = WalkDir::new(&self.root);
-        let res = FileIteratorBuilder {
-            include_patterns,
-            ignore_patterns,
-            gitignore,
-            walk_dir,
+    pub fn get_paths(&self) -> anyhow::Result<impl IntoIterator<Item = PathBuf>> {
+        let mut overrides = ignore::overrides::OverrideBuilder::new(&self.match_base);
+        for include in &self.include {
+            overrides
+                .add(include)
+                .context("add include to ignore overrides")?;
         }
-        .build()
-        .filter_map(|path| match path {
-            Ok(path) => Some(path),
-            Err(e) => {
-                error!("Failed to visit one path: {:?}", e);
-                None
+        let overrides = overrides.build().context("build the ignore overrides")?;
+        let mut builder = ignore::WalkBuilder::new(&self.root);
+        builder.overrides(overrides);
+        let prettier_ignore = PathBuf::from(&self.match_base).join(".prettierignore");
+        builder.add_custom_ignore_filename(prettier_ignore);
+        let gitignore = PathBuf::from(&self.match_base).join(".gitignore");
+        if let Some(e) = builder.add_ignore(gitignore) {
+            return Err(e).context("adding .gitignore to ignore::WalkBuilder");
+        }
+        Ok(builder.build().filter_map({
+            let match_base = self.match_base.clone();
+            move |res| {
+                let entry = match res {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        error!("Failed to handle a file entry: {:?}", e);
+                        return None;
+                    }
+                };
+                if entry.file_type().map(|file_type| file_type.is_file()) != Some(true) {
+                    return None;
+                }
+                let mut path = entry.into_path();
+                if path.is_relative() {
+                    path = PathBuf::from(&match_base).join(path);
+                }
+                path = path.canonicalize().expect("the path should be valid");
+                Some(path)
             }
-        });
-        Ok(res)
+        }))
     }
 }
 
@@ -120,94 +103,7 @@ pub fn parse_args<T>(args: impl IntoIterator<Item = T>) -> Result<Cli, ClapError
 where
     T: Into<OsString> + Clone,
 {
-    let mut cli = Cli::try_parse_from(args)?;
-    if cli.include.is_empty() {
-        cli.include.push("*".to_string());
-    }
-    Ok(cli)
-}
-
-struct FileIteratorBuilder {
-    pub include_patterns: Vec<Pattern>,
-    pub ignore_patterns: Vec<Pattern>,
-    pub gitignore: Option<Gitignore>,
-    pub walk_dir: WalkDir,
-}
-
-impl Default for FileIteratorBuilder {
-    fn default() -> Self {
-        Self {
-            include_patterns: vec![],
-            ignore_patterns: vec![],
-            gitignore: None,
-            walk_dir: WalkDir::new("."),
-        }
-    }
-}
-
-impl FileIteratorBuilder {
-    fn build(self) -> FileIterator {
-        let Self {
-            include_patterns,
-            ignore_patterns,
-            gitignore,
-            walk_dir,
-        } = self;
-        FileIterator {
-            include_patterns,
-            ignore_patterns,
-            gitignore,
-            current: walk_dir.into_iter(),
-        }
-    }
-}
-
-struct FileIterator {
-    include_patterns: Vec<Pattern>,
-    ignore_patterns: Vec<Pattern>,
-    gitignore: Option<Gitignore>,
-    current: walkdir::IntoIter,
-}
-
-impl Iterator for FileIterator {
-    type Item = anyhow::Result<PathBuf>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(res) = self.current.next() {
-            let entry = match res {
-                Ok(entry) => entry,
-                Err(e) => return Some(Err(anyhow!("Failed to visit the next entry: {:?}", e))),
-            };
-            let mut should_ignore = self
-                .ignore_patterns
-                .iter()
-                .any(|pat| pat.matches_path(entry.path()));
-            let file_type = entry.file_type();
-            if let Some(gitignore) = &self.gitignore {
-                should_ignore = should_ignore
-                    || gitignore
-                        .matched(entry.path(), file_type.is_dir())
-                        .is_ignore();
-            }
-            if should_ignore && file_type.is_dir() {
-                self.current.skip_current_dir();
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let mut should_include = !should_ignore;
-            should_include = should_include
-                && self
-                    .include_patterns
-                    .iter()
-                    .any(|pat| pat.matches_path(entry.path()));
-            if should_include {
-                return Some(Ok(entry.into_path()));
-            }
-        }
-        None
-    }
+    Cli::try_parse_from(args)
 }
 
 pub struct TaskBuilder {
@@ -219,7 +115,7 @@ impl TaskBuilder {
         Self { command }
     }
 
-    pub fn build_task<'a>(&self, paths: impl IntoIterator<Item = &'a Path>) -> Task {
+    pub fn build_task(&self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Task {
         if self.command.is_empty() {
             let mut to_print = OsString::new();
             let mut first = true;
@@ -229,7 +125,7 @@ impl TaskBuilder {
                 } else {
                     to_print.push(" ");
                 }
-                to_print.push(path);
+                to_print.push(path.as_ref());
             }
             Task::Print(to_print)
         } else {
@@ -238,7 +134,7 @@ impl TaskBuilder {
                 command.arg(arg);
             }
             for path in paths {
-                command.arg(path);
+                command.arg(path.as_ref());
             }
             Task::SpawnProcess(command)
         }
@@ -273,6 +169,7 @@ impl Task {
                         .expect("should not fail to join");
                     command
                 };
+                debug!("start command: `{}'", command_str);
                 let output = command
                     .output()
                     .with_context(|| format!("spawn and wait for the command {}", &command_str))?;
@@ -297,6 +194,7 @@ impl Task {
                         command_str, e
                     );
                 }
+                debug!("command ends successfully: `{}'", command_str);
                 Ok(())
             }
         }
@@ -314,8 +212,6 @@ mod tests {
             "--include=*.yaml",
             "--include",
             "*.yml",
-            "--ignore=.git",
-            "--ignore=__pycache__",
             "tmp/subdir",
             "--",
             "ls",
@@ -323,7 +219,6 @@ mod tests {
         ];
         let cli = parse_args(args).expect("should parse successfully");
         assert_eq!(cli.include, vec!["*.yaml", "*.yml"]);
-        assert_eq!(cli.ignore, vec![".git", "__pycache__"]);
         assert_eq!(cli.command, vec!["ls", "-lah"]);
         assert_eq!(cli.root, "tmp/subdir");
     }
@@ -332,11 +227,5 @@ mod tests {
     fn test_parse_args_missing_root() {
         let res = parse_args(["progname"]);
         assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_parse_args_missing_include() {
-        let cli = parse_args(["progname", "."]).expect("should parse successfully");
-        assert_eq!(cli.include, vec!["*"]);
     }
 }
