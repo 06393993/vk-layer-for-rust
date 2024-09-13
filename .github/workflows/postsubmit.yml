@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: echo "C:\Program Files\Git\usr\bin" >> $env:GITHUB_PATH
       - name: Install missing depedencis (Linux)
-        run: sudo apt-get install libtinfo5 libdrm-dev bison byacc flex ninja-build -y
+        run: sudo apt-get install libdrm-dev bison byacc flex ninja-build -y
         if: runner.os == 'Linux'
       - name: install missing dependencies (Windows)
         run: choco install -y winflexbison pkgconfiglite
