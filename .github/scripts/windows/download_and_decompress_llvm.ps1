@@ -1,4 +1,3 @@
-
 # Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +21,20 @@ param(
 
 $ErrorActionPreference = 'stop'
 
-Invoke-WebRequest https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz -OutFile C:\Users\Public\clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz
+$params = @{
+    Uri = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/" +
+    "clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz"
+    OutFile = "C:\Users\Public\clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz"
+}
+Invoke-WebRequest @params
 New-Item -ItemType Directory "$LlvmInstallPath" -Force -ErrorAction SilentlyContinue
-python -m tarfile -e C:\Users\Public\clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz "$LlvmInstallPath"
+$params = @(
+    "-m", "tarfile",
+    "-e", "C:\Users\Public\clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz",
+    "a",
+    $LlvmInstallPath
+)
+python @params
 Foreach ($dir in (Get-ChildItem -Path "$LlvmInstallPath" -Directory)) {
     Get-ChildItem -Path $dir | Move-Item -Destination "$LlvmInstallPath" -Force
 }

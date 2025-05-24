@@ -41,7 +41,10 @@ jobs:
           sudo apt-get install libdrm-dev bison byacc flex ninja-build -y
         if: runner.os == 'Linux'
       - name: install missing dependencies (Windows)
-        run: choco install -y winflexbison pkgconfiglite
+        run: |
+          choco install -y winflexbison pkgconfiglite
+          Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+        shell: pwsh
         if: runner.os == 'Windows'
       # Need a non-elevated user so that the Vulkan loader can pick the lavapipe ICD.
       - name: Create a new user (Windows)

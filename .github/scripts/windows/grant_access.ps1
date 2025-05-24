@@ -17,28 +17,48 @@
 $ErrorActionPreference = 'stop'
 
 Import-Module Microsoft.PowerShell.Security
-$Right = [System.Security.AccessControl.FileSystemRights]::FullControl
-$ControlType = [System.Security.AccessControl.AccessControlType]::Allow
-$Inheritance = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit + [System.Security.AccessControl.InheritanceFlags]::ContainerInherit
-$Propagation = [System.Security.AccessControl.PropagationFlags]::None
-$DirRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Everyone", $Right, $Inheritance, $Propagation, $ControlType
-$FileRule = New-Object System.Security.AccessControl.FileSystemAccessRule "Everyone", $Right, $ControlType
+$right = [System.Security.AccessControl.FileSystemRights]::FullControl
+$controlType = [System.Security.AccessControl.AccessControlType]::Allow
+$inheritanceFlags = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit +
+[System.Security.AccessControl.InheritanceFlags]::ContainerInherit
+$params = @(
+    "System.Security.AccessControl.FileSystemAccessRule",
+    @(
+        "Everyone",
+        $right,
+        $inheritanceFlags,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        $controlType
+    )
+)
+$dirRule = New-Object @params
+$params = @(
+    "System.Security.AccessControl.FileSystemAccessRule",
+    @(
+        "Everyone",
+        $right,
+        $controlType
+    )
+)
+$fileRule = New-Object @params
 
-$FilesAndFolders = Get-ChildItem "$env:USERPROFILE" -recurse | ForEach-Object { $_.FullName }
-$FilesAndFolders += "$env:USERPROFILE"
-foreach ($FileAndFolder in (Get-ChildItem "$env:GITHUB_WORKSPACE" -recurse | ForEach-Object { $_.FullName })) {
-    $FilesAndFolders += $FileAndFolder
+$filesAndFolders = Get-ChildItem "$env:USERPROFILE" -recurse | ForEach-Object { $_.FullName }
+$filesAndFolders += "$env:USERPROFILE"
+foreach ($fileAndFolder in (Get-ChildItem "$env:GITHUB_WORKSPACE" -recurse |
+            ForEach-Object { $_.FullName })) {
+    $filesAndFolders += $fileAndFolder
 }
-$FilesAndFolders += "$env:GITHUB_WORKSPACE"
+$filesAndFolders += "$env:GITHUB_WORKSPACE"
 
-foreach ($FileAndFolder in $FilesAndFolders) {
-    #using get-item instead because some of the folders have '[' or ']' character and Powershell throws exception trying to do a get-acl or set-acl on them.
-    $Item = Get-Item -literalpath $FileAndFolder
-    $Acl = [System.IO.FileSystemAclExtensions]::GetAccessControl($Item)
-    $Rule = $FileRule
-    if ($Item.PSIsContainer) {
-        $Rule = $DirRule
+foreach ($fileAndFolder in $filesAndFolders) {
+    # Use get-item instead because some of the folders have '[' or ']' character and Powershell
+    # throws exception trying to do a get-acl or set-acl on them.
+    $item = Get-Item -literalpath $fileAndFolder
+    $acl = [System.IO.FileSystemAclExtensions]::GetAccessControl($item)
+    $rule = $fileRule
+    if ($item.PSIsContainer) {
+        $rule = $dirRule
     }
-    $Acl.SetAccessRule($Rule)
-    [System.IO.FileSystemAclExtensions]::SetAccessControl($Item, $Acl)
+    $acl.SetAccessRule($rule)
+    [System.IO.FileSystemAclExtensions]::SetAccessControl($item, $acl)
 }

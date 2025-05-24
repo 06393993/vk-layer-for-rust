@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    "PSAvoidUsingConvertToSecureStringWithPlainText",
+    "",
+    Justification = "A test account created with plain texts."
+)]
 param(
     [Parameter(Mandatory = $true)]
     [string]$LlvmInstallPath
@@ -19,7 +24,20 @@ param(
 
 $ErrorActionPreference = 'stop'
 
-$credentials = New-Object System.Management.Automation.PSCredential -ArgumentList @("testuser", (ConvertTo-SecureString -String "i23456@B" -AsPlainText -Force))
-$proc = Start-Process -FilePath cargo.exe -ArgumentList "make", "ci-e2e-test", "--llvm-path", "$LlvmInstallPath" -NoNewWindow -PassThru -Credential $credentials
+$credArgList = @("testuser", (ConvertTo-SecureString -String "i23456@B" -AsPlainText -Force))
+$credentials = New-Object System.Management.Automation.PSCredential -ArgumentList $credArgList
+$params = @{
+    FilePath = "cargo.exe"
+    ArgumentList = @(
+        "make",
+        "ci-e2e-test",
+        "--llvm-path",
+        $LlvmInstallPath
+    )
+    NoNewWindow = $true
+    PassThru = $true
+    Credential = $credentials
+}
+$proc = Start-Process @params
 $proc.WaitForExit()
 exit $proc.ExitCode
