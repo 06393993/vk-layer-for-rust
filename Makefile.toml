@@ -148,6 +148,11 @@ category = "Development"
 command = "cargo"
 description = "Runs cargo check."
 
+[tasks.build-scripts]
+args = ["build", "-p", "vulkan-layer-scripts", "--release"]
+command = "cargo"
+private = true
+
 [tasks.rust-clippy]
 args = [
     "clippy",
@@ -282,7 +287,7 @@ description = "Format YAML files."
 category = "Format/Lint"
 dependencies = ["license", "toml-fmt"]
 description = "Lint all source files."
-run_task.name = ["rust-lint", "python-lint", "mdformat", "yamlfmt"]
+run_task.name = ["rust-lint", "build-scripts", "python-lint", "mdformat", "yamlfmt"]
 
 [tasks.nextest-detection]
 args = ["nextest", "--version"]
