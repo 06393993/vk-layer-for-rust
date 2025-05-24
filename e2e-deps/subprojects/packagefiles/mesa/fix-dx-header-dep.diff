@@ -1,0 +1,22 @@
+--- a/meson.build
++++ b/meson.build
+@@ -578,8 +578,9 @@ if with_gallium_kmsro and (with_platform_x11 and not with_dri3)
+   error('kmsro requires dri3 for X11 support')
+ endif
+
++with_windows_vk = with_any_vk and with_platform_windows
+ dep_dxheaders = null_dep
+-if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk
++if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk or with_windows_vk
+   dep_dxheaders = dependency('directx-headers', required : false)
+   if not dep_dxheaders.found()
+     dep_dxheaders = dependency('DirectX-Headers',
+@@ -943,7 +944,7 @@ if get_option('allow-kcmp') \
+   pre_args += '-DALLOW_KCMP'
+ endif
+
+-prog_python = import('python').find_installation('python3')
++prog_python = import('python').find_installation()
+ has_mako = run_command(
+   prog_python, '-c',
+   '''

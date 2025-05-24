@@ -1,0 +1,6 @@
+[wrap-file]
+directory = clang+llvm-18.1.8-x86_64-pc-windows-msvc
+source_url = https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz
+source_filename = clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz
+source_hash = 22c5907db053026cc2a8ff96d21c0f642a90d24d66c23c6d28ee7b1d572b82e8
+patch_directory = llvm

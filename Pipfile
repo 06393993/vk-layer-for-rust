@@ -8,6 +8,12 @@ black = "*"
 ruff = "*"
 mdformat-gfm = "*"
 
+# Needed by building lavapipe on Windows for e2e tests
+pyyaml = "*"
+packaging = "*"
+mako = "*"
+meson = "*"
+
 [dev-packages]
 
 [requires]

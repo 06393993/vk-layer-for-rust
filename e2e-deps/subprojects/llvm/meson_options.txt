@@ -1,0 +1,6 @@
+option(
+    'llvm-path',
+    type: 'string',
+    value: '',
+    description: 'path to search the LLVM libraries',
+)

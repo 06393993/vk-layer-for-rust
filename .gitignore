@@ -1,4 +1,5 @@
 /target
+/e2e-deps/build
 
 .vscode
 __pycache__
@@ -9,3 +10,14 @@ venv/
 
 .jj/
 .python-version
+
+/e2e-deps/subprojects/*
+/e2e-deps/subprojects/**/*
+!/e2e-deps/subprojects/llvm/
+!/e2e-deps/subprojects/llvm/**/*
+!/e2e-deps/subprojects/vulkan-runtime/
+!/e2e-deps/subprojects/vulkan-runtime/**/*
+!/e2e-deps/subprojects/packagefiles/
+!/e2e-deps/subprojects/packagefiles/**/*
+!/e2e-deps/subprojects/mesa.wrap
+!/e2e-deps/subprojects/vulkan-runtime.wrap

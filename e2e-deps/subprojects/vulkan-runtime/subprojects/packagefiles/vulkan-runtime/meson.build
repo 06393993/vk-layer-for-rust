@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[profile.default]
-default-filter = "!package(e2e-test)"
-retries = 0
-test-threads = "num-cpus"
+project('vulkan-runtime', ['cpp'])
 
-[profile.ci]
-fail-fast = false
-failure-output = "immediate-final"
-
-[profile.default-miri]
-test-threads = "num-cpus"
+if target_machine.system() == 'windows'
+    install_data(join_paths(meson.current_source_dir(), 'x64', 'vulkan-1.dll'), install_dir: 'bin')
+    install_data(join_paths(meson.current_source_dir(), 'x64', 'vulkaninfo.exe'), install_dir: 'bin')
+elif target_machine.system() == 'linux'
+    install_subdir(join_paths(meson.current_source_dir(), '1.3.290.0', 'x86_64'), strip_directory : true, install_dir: '.')
+else
+    error('Unsupported target system: ' + target_machine.system())
+endif
