@@ -21,6 +21,7 @@ use vulkan_layer_scripts::list_files::{parse_args, TaskBuilder};
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::new()
+        // TODO: !!! set the filter level based on github actions' debug env.
         .filter_level(log::LevelFilter::Trace)
         .init();
 
@@ -34,12 +35,20 @@ fn main() -> anyhow::Result<()> {
 
     let errors = std::thread::scope(move |s| {
         let errors: Arc<Mutex<Vec<anyhow::Error>>> = Arc::default();
-        for paths in &paths.into_iter().chunks(10) {
+        // Chunk every 1024 bytes to avoid the arguments too long on Windows.
+        let path_chunks = paths
+            .into_iter()
+            .scan(0usize, |len, path| {
+                *len += path.as_os_str().len();
+                Some((*len, path))
+            })
+            .chunk_by(|(len, _)| len / 1024);
+        for (_, chunk) in &path_chunks {
             if !errors.lock().unwrap().is_empty() {
                 break;
             }
-            let paths = paths.collect::<Vec<_>>();
-            let task = task_builder.build_task(paths.iter().map(|path| path.as_ref()));
+            let paths = chunk.map(|(_, path)| path);
+            let task = task_builder.build_task(paths);
             s.spawn({
                 let errors = errors.clone();
                 move || {

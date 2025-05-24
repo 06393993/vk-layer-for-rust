@@ -57,9 +57,11 @@ if ${has_check_arg} or ${is_ci_target}
     set_env MY_CARGO_MAKE_TAPLO_CHECK_ARG --check
     set_env MY_CARGO_MAKE_MDFORMAT_CHECK_ARG --check
     set_env MY_CARGO_MAKE_YAMLFMT_CHECK_ARGS -quiet;-lint
+    set_env MY_CARGO_MAKE_MESON_FORMAT_CHECK_ARG -q
 else
     set_env MY_CARGO_MAKE_CLIPPY_FIX_ARGS --fix;--allow-dirty;--allow-staged
     set_env MY_CARGO_MAKE_RUFF_FIX_ARG --fix
+    set_env MY_CARGO_MAKE_MESON_FORMAT_CHECK_ARG -i
 end
 
 # For some targets, only passthrough the arguments if it's the toplevel target.
@@ -195,8 +197,6 @@ args = [
     "list-files",
     "--release",
     "--",
-    "--use-gitignore",
-    "--ignore=**/third_party",
     ".",
     "--",
     "${MY_CARGO_MAKE_ADDLICENSE_PATH}",
@@ -298,8 +298,6 @@ args = [
     "list-files",
     "--release",
     "--",
-    "--use-gitignore",
-    "--ignore=**/third_party",
     "--include=*.md",
     ".",
     "--",
@@ -345,6 +343,30 @@ condition.platforms = ["linux"]
 dependencies = ["detect-yamlfmt"]
 description = "Format YAML files."
 
+[tasks.meson-fmt]
+args = [
+    "run",
+    "-p",
+    "vulkan-layer-scripts",
+    "--bin",
+    "list-files",
+    "--release",
+    "--",
+    ".",
+    "--include=meson.build",
+    "--",
+    "pipenv",
+    "run",
+    "meson",
+    "format",
+    "--configuration",
+    "meson.format",
+    "@@remove-empty(MY_CARGO_MAKE_MESON_FORMAT_CHECK_ARG)",
+]
+category = "Format/Lint"
+command = "cargo"
+description = "Format meson build scripts."
+
 [tasks.lint]
 # No need to run lint tasks in parallel as the overhead of fork in cargo-make is significant. In the
 # IDX environment, with everything cached running in parallel takes 15s, while without parallel, it
@@ -353,7 +375,7 @@ category = "Format/Lint"
 dependencies = ["license", "toml-fmt"]
 description = "Lint all source files."
 # TODO: !!! add powershell linter and format
-run_task.name = ["rust-lint", "build-scripts", "python-lint", "mdformat", "yamlfmt"]
+run_task.name = ["rust-lint", "build-scripts", "python-lint", "mdformat", "yamlfmt", "meson-fmt"]
 
 [tasks.nextest-detection]
 args = ["nextest", "--version"]

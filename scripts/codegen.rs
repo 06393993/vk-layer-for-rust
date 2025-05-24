@@ -56,17 +56,16 @@ fn generate_vulkan_layer_header_binding(
     info!("Preparing the task to generate vulkan_layer.h...");
 
     let out_file_relative_path = PathBuf::from_iter(["bindings", "vk_layer", "generated.rs"]);
-    let out_file = PathBuf::from_iter([out_dir.to_owned(), out_file_relative_path.clone()]);
+    let out_file = out_dir.to_owned().join(&out_file_relative_path);
     let mut platform_specific_out_relative_path =
         PathBuf::from_iter(["bindings", "vk_layer", "generated"]);
     #[cfg(windows)]
     platform_specific_out_relative_path.push("windows.rs");
     #[cfg(unix)]
     platform_specific_out_relative_path.push("unix.rs");
-    let platform_specific_out = PathBuf::from_iter([
-        out_dir.to_owned(),
-        platform_specific_out_relative_path.clone(),
-    ]);
+    let platform_specific_out = out_dir
+        .to_owned()
+        .join(&platform_specific_out_relative_path);
 
     let rustfmt_path = {
         let output = Command::new("rustup")
@@ -386,18 +385,16 @@ fn main() -> ExitCode {
             let (diff_message_tx, diff_message_rx) = mpsc::channel();
             while let Ok(completed_file) = completed_files_rx.recv() {
                 s.spawn({
-                    let before_path = PathBuf::from_iter([
-                        project_root_dir.clone(),
-                        PathBuf::from("vulkan-layer"),
-                        PathBuf::from("src"),
-                        completed_file.clone(),
-                    ]);
-                    let after_path = PathBuf::from_iter([
-                        target_root_dir.clone(),
-                        PathBuf::from("vulkan-layer"),
-                        PathBuf::from("src"),
-                        completed_file.clone(),
-                    ]);
+                    let before_path = project_root_dir
+                        .clone()
+                        .join("vulkan-layer")
+                        .join("src")
+                        .join(&completed_file);
+                    let after_path = target_root_dir
+                        .clone()
+                        .join("vulkan-layer")
+                        .join("src")
+                        .join(&completed_file);
                     let diff_message_tx = diff_message_tx.clone();
                     move || {
                         debug!(

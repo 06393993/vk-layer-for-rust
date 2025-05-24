@@ -241,12 +241,12 @@ _lib_names = [
     'LTO',
     'Remarks',
 ]
-foreach d : _lib_names 
-  _deps += cpp.find_library(d, dirs : _search)
+foreach d : _lib_names
+    _deps += cpp.find_library(d, dirs: _search)
 endforeach
 
 if target_machine.system() == 'windows'
-  install_data(llvm_c_dylib, install_dir: 'bin')
+    install_data(llvm_c_dylib, install_dir: 'bin')
 endif
 
 _link_args = []
@@ -254,10 +254,10 @@ if target_machine.system() == 'linux'
     _link_args = ['-ltinfo']
 endif
 dep_llvm = declare_dependency(
-  include_directories : _inc,
-  link_args : _link_args,
-  dependencies : _deps,
-  version : '18.1.8',
+    include_directories: _inc,
+    link_args: _link_args,
+    dependencies: _deps,
+    version: '18.1.8',
 )
 
 has_rtti = false

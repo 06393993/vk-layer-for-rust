@@ -13,34 +13,34 @@
 # limitations under the License.
 
 project(
-  'e2e-deps',
-  ['c', 'cpp'],
-  meson_version : '>= 1.1.0',
-  default_options: 'buildtype=debugoptimized',
+    'e2e-deps',
+    ['c', 'cpp'],
+    meson_version: '>= 1.1.0',
+    default_options: 'buildtype=debugoptimized',
 )
 
-if target_machine.system() ==  'windows'
-  platforms_option = 'platforms=windows'
-elif target_machine.system() ==  'linux'
-  platforms_option = 'platforms='
+if target_machine.system() == 'windows'
+    platforms_option = 'platforms=windows'
+elif target_machine.system() == 'linux'
+    platforms_option = 'platforms='
 else
-  error('Unsupported target system: ' + target_machine.system())
+    error('Unsupported target system: ' + target_machine.system())
 endif
 
 subproject('llvm')
 
 subproject(
-  'mesa',
-  default_options: [
-    platforms_option,
-    'cpp_rtti=false',
-    'gallium-drivers=swrast',
-    'vulkan-drivers=swrast',
-    'opengl=false',
-    'gles1=disabled',
-    'gles2=disabled',
-    'shared-glapi=disabled',
-  ]
+    'mesa',
+    default_options: [
+        platforms_option,
+        'cpp_rtti=false',
+        'gallium-drivers=swrast',
+        'vulkan-drivers=swrast',
+        'opengl=false',
+        'gles1=disabled',
+        'gles2=disabled',
+        'shared-glapi=disabled',
+    ],
 )
 
 subproject('vulkan-runtime')
